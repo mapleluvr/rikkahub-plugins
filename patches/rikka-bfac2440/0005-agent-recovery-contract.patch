@@ -1,0 +1,234 @@
+From 0a9ac1f4e1863cfd4c9d514316c140ced961b37f Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 04:17:20 +0800
+Subject: [PATCH] Validate resume phases and retract failed request previews
+
+Patch-Id: agent-recovery-contract
+---
+ ai/src/main/java/me/rerere/ai/agent/Agent.kt  |  16 ++-
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt | 106 +++++++++++++-----
+ .../me/rerere/rikkahub/service/ChatService.kt |  12 ++
+ 3 files changed, 106 insertions(+), 28 deletions(-)
+
+diff --git a/ai/src/main/java/me/rerere/ai/agent/Agent.kt b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+index 2e0d71feb4929daee24b41ab60c5afd0ec202e90..fa782b9d434b743766b9bdf91d2b8e377d41adb0 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/Agent.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+@@ -33,7 +33,15 @@ data class AgentRequest(
+ /** Generic safe points; business operations are owned by the caller. */
+ enum class AgentBoundary { BeforeModel, ToolPreflight, BeforeTool, AfterTools, BeforeComplete }
+ 
+-data class AgentCursor(val boundary: AgentBoundary, val nextStep: Int, val toolCallId: String? = null)
++data class AgentToolBinding(val id: String, val name: String, val input: String)
++
++data class AgentCursor(
++    val boundary: AgentBoundary,
++    val nextStep: Int,
++    val toolCallId: String? = null,
++    val messageId: String? = null,
++    val toolBatch: List<AgentToolBinding> = emptyList(),
++)
+ 
+ data class AgentBoundaryContext(val cursor: AgentCursor, val message: UIMessage?)
+ 
+@@ -101,6 +109,12 @@ sealed interface AgentEvent {
+     /** May precede the first assistant message. The caller owns persistence and rescheduling. */
+     data class Yielded(val message: UIMessage?, val cursor: AgentCursor, val token: String) : AgentEvent
+ 
++    /** A retry discards only its preview, restoring the committed state or removing its new reply. */
++    data class PreviewReset(val replyId: kotlin.uuid.Uuid, val authoritative: UIMessage?) : AgentEvent
++
++    /** Terminal budget exhaustion before an assistant message exists. This is not a resumable wait. */
++    data class BudgetExhausted(val completedSteps: Int) : AgentEvent
++
+     /** 本轮助手消息的最新内容，整次运行 id 不变 */
+     data class MessageUpdated(val message: UIMessage) : AgentEvent
+ 
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index 32fe78d2a9c0ab0b4a068fb622a722d1430f2879..24a5bb33622549a3af4271f5096d28dccfeddfe9 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -25,6 +25,7 @@ private const val EMPTY_TOOL_OUTPUT = "(no output)"
+ 
+ private class StreamChunkHandlingException(override val cause: Throwable) : RuntimeException(cause)
+ private class AgentYield(val cursor: AgentCursor, val token: String) : CancellationException(token)
++private class AgentBudgetReached : CancellationException("Logical step budget exhausted")
+ 
+ internal class AgentLoop(
+     private val request: AgentRequest,
+@@ -53,43 +54,84 @@ internal class AgentLoop(
+             runSegment()
+         } catch (yield: AgentYield) {
+             events.emit(AgentEvent.Yielded(message, yield.cursor, yield.token))
++        } catch (_: AgentBudgetReached) {
++            finish(AgentFinishReason.StepLimitReached)
+         }
+     }
+ 
+     private suspend fun runSegment() {
+-        if (request.resumeCursor?.boundary == AgentBoundary.AfterTools) boundary(AgentBoundary.AfterTools)
+-        var generatedHere = false
++        request.resumeCursor?.let(::validateResume)
++        var phase = request.resumeCursor?.boundary ?: if (hasUnfinishedTools()) {
++            AgentBoundary.ToolPreflight
++        } else AgentBoundary.BeforeModel
+         while (true) {
+-            val current = message
+-            var toolsExecuted = false
+-            if (current != null && current.getTools().any { !it.isExecuted }) {
+-                if (generatedHere || request.resumeCursor?.boundary != AgentBoundary.BeforeTool) {
+-                    boundary(AgentBoundary.ToolPreflight)
++            phase = when (phase) {
++                AgentBoundary.ToolPreflight -> {
++                    boundary(phase)
++                    val pending = requestApprovals(checkNotNull(message))
++                    if (pending.isNotEmpty()) return finish(AgentFinishReason.AwaitingApproval(pending))
++                    AgentBoundary.BeforeTool
++                }
++                AgentBoundary.BeforeTool -> {
++                    executeTools()
++                    AgentBoundary.AfterTools
++                }
++                AgentBoundary.AfterTools -> {
++                    boundary(phase)
++                    requireStepBudget()
++                    // Compatibility hook until P3 moves this policy into a registered operation.
++                    if (hooks.shouldPause(checkNotNull(message))) return finish(AgentFinishReason.Paused)
++                    AgentBoundary.BeforeModel
++                }
++                AgentBoundary.BeforeComplete -> {
++                    if (!boundary(phase)) return finish(AgentFinishReason.Completed)
++                    AgentBoundary.BeforeModel
++                }
++                AgentBoundary.BeforeModel -> {
++                    requireStepBudget()
++                    boundary(phase)
++                    generateStep()
++                    logicalSteps++
++                    if (hasUnfinishedTools()) AgentBoundary.ToolPreflight else AgentBoundary.BeforeComplete
+                 }
+-                val pending = requestApprovals(current)
+-                if (pending.isNotEmpty()) return finish(AgentFinishReason.AwaitingApproval(pending))
+-                executeTools()
+-                toolsExecuted = true
+-                boundary(AgentBoundary.AfterTools)
+-            } else if (current != null && (generatedHere || request.resumeCursor?.boundary == AgentBoundary.BeforeComplete)) {
+-                if (!boundary(AgentBoundary.BeforeComplete)) return finish(AgentFinishReason.Completed)
+             }
+-            if (logicalSteps == request.maxSteps) {
+-                if (message == null) throw AgentYield(AgentCursor(AgentBoundary.BeforeModel, logicalSteps), "step-limit")
+-                return finish(AgentFinishReason.StepLimitReached)
++        }
++    }
++
++    private fun hasUnfinishedTools() = message?.getTools()?.any { !it.isExecuted } == true
++
++    private fun cursor(point: AgentBoundary, toolCallId: String? = null) = AgentCursor(
++        point, logicalSteps, toolCallId, message?.id?.toString(),
++        message?.getTools().orEmpty().map { AgentToolBinding(it.toolCallId, it.toolName, it.input) },
++    )
++
++    private fun validateResume(saved: AgentCursor) {
++        require(saved == cursor(saved.boundary, saved.toolCallId)) { "Resume message or tool batch changed" }
++        val tools = message?.getTools().orEmpty()
++        require(tools.map { it.toolCallId }.distinct().size == tools.size) { "Duplicate tool identity" }
++        val pending = tools.filter { !it.isExecuted }
++        when (saved.boundary) {
++            AgentBoundary.BeforeTool -> {
++                require(saved.toolCallId != null && pending.firstOrNull()?.toolCallId == saved.toolCallId) {
++                    "Resume cursor does not identify the next unfinished tool"
++                }
++                require(pending.none { it.isPending || it.startedAt != null }) { "Tool needs approval or effect reconciliation" }
+             }
+-            // Legacy policy remains until the default feature migrates to an operation.
+-            if (toolsExecuted && hooks.shouldPause(checkNotNull(message))) return finish(AgentFinishReason.Paused)
+-            boundary(AgentBoundary.BeforeModel)
+-            generateStep()
+-            logicalSteps++
+-            generatedHere = true
++            AgentBoundary.ToolPreflight -> require(pending.isNotEmpty()) { "No batch to preflight" }
++            AgentBoundary.AfterTools -> require(tools.isNotEmpty() && pending.isEmpty()) { "Tool batch is incomplete" }
++            AgentBoundary.BeforeComplete -> require(message != null && pending.isEmpty()) { "Completion state changed" }
++            AgentBoundary.BeforeModel -> require(pending.isEmpty()) { "Unfinished tools before model request" }
+         }
++        if (saved.boundary != AgentBoundary.BeforeTool) require(saved.toolCallId == null)
++    }
++
++    private fun requireStepBudget() {
++        if (logicalSteps >= request.maxSteps) throw AgentBudgetReached()
+     }
+ 
+     /** Returns true only when a completion controller supplied explicit next-step input. */
+     private suspend fun boundary(point: AgentBoundary, toolCallId: String? = null): Boolean {
+-        val cursor = AgentCursor(point, logicalSteps, toolCallId)
++        val cursor = cursor(point, toolCallId)
+         return when (val decision = request.control.decide(AgentBoundaryContext(cursor, message))) {
+             AgentDecision.Proceed -> false
+             is AgentDecision.Yield -> {
+@@ -99,6 +141,7 @@ internal class AgentLoop(
+             is AgentDecision.Continue -> {
+                 require(point == AgentBoundary.BeforeComplete) { "Continue is only valid before completion" }
+                 require(decision.notice.text.isNotBlank()) { "Continue requires new input" }
++                requireStepBudget()
+                 val current = checkNotNull(message)
+                 update(current.copy(parts = current.parts + decision.notice))
+                 true
+@@ -108,7 +151,7 @@ internal class AgentLoop(
+ 
+     private fun admitModel(attempt: Int) {
+         request.control.admitModel(logicalSteps, attempt)?.let { token ->
+-            throw AgentYield(AgentCursor(AgentBoundary.BeforeModel, logicalSteps), token)
++            throw AgentYield(cursor(AgentBoundary.BeforeModel), token)
+         }
+     }
+ 
+@@ -169,7 +212,10 @@ internal class AgentLoop(
+         val stepStart = base.copy(usage = null, generationTimeMs = null)
+         var attemptNumber = 0
+         return try {
+-            withRetry(request.retry, onRetry = { events.emit(AgentEvent.Retrying(it)) }) {
++            withRetry(request.retry, onRetry = {
++                events.emit(AgentEvent.PreviewReset(base.id, message))
++                events.emit(AgentEvent.Retrying(it))
++            }) {
+                 admitModel(attemptNumber++)
+                 // 每次重试都从本步开始时的消息重新合并，不会把重试的响应接在已经展示的半截回复后面；
+                 // 各次尝试共用同一个消息 id，调用方直接覆盖即可。
+@@ -283,7 +329,13 @@ internal class AgentLoop(
+     }
+ 
+     private suspend fun finish(reason: AgentFinishReason) {
+-        events.emit(AgentEvent.Finished(checkNotNull(message), reason, logicalSteps))
++        val current = message
++        if (current == null) {
++            check(reason == AgentFinishReason.StepLimitReached)
++            events.emit(AgentEvent.BudgetExhausted(logicalSteps))
++        } else {
++            events.emit(AgentEvent.Finished(current, reason, logicalSteps))
++        }
+     }
+ }
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 6cd7e26b45a10a70e0ee443af537908e233c2a67..2046713226147dd0c3502573642956a390af18f4 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -771,6 +771,18 @@ class ChatService(
+                                 session.processingStatus.value = retryStatus(event.attempt)
+                             }
+ 
++                            is AgentEvent.PreviewReset -> {
++                                session.update { latest ->
++                                    event.authoritative?.let { latest.upsertMessage(replyNodeId, it) }
++                                        ?: latest.deleteMessage(event.replyId) ?: latest
++                                }
++                                session.replyMessageId.value = event.authoritative?.id
++                            }
++
++                            is AgentEvent.BudgetExhausted -> {
++                                finishReason = AgentFinishReason.StepLimitReached
++                            }
++
+                             is AgentEvent.Yielded -> error("Run controller requires a session coordinator")
+ 
+                             is AgentEvent.Finished -> {
