@@ -1,4 +1,4 @@
-From e2dbbb6c93c2582e340eab6108ea35e013abe888 Mon Sep 17 00:00:00 2001
+From 2a603ded180ea599b09ac001adb5c8bef8a0531e Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 03:33:53 +0800
 Subject: [PATCH] Persist extension state and unpromoted drafts in the
@@ -10,10 +10,10 @@ Patch-Id: conversation-storage
  .../35.json                                   | 1065 +++++++++++++++++
  .../me/rerere/rikkahub/data/db/AppDatabase.kt |    8 +-
  .../rikkahub/data/model/Conversation.kt       |    5 +
- .../data/repository/ConversationRepository.kt |   17 +-
- .../me/rerere/rikkahub/service/ChatService.kt |    2 +
+ .../data/repository/ConversationRepository.kt |   21 +-
+ .../me/rerere/rikkahub/service/ChatService.kt |    6 +-
  .../rikkahub/service/ConversationSession.kt   |   69 +-
- 7 files changed, 1156 insertions(+), 14 deletions(-)
+ 7 files changed, 1163 insertions(+), 15 deletions(-)
  create mode 100644 app/schemas/me.rerere.rikkahub.data.db.AppDatabase/35.json
 
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
@@ -1177,7 +1177,7 @@ index ce86f518429c1d57a0425938025c41eef5fa7e28..4c83b6bd525b3ccec71250bf62eca3d7
      val newConversation: Boolean = false
  ) {
 diff --git a/app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt b/app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt
-index edc17148c9d48b94110bd41e8cd46356edfec42d..bc1240ce83d5e0b765e10dd68e9705aa7e27f03f 100644
+index edc17148c9d48b94110bd41e8cd46356edfec42d..3ad1db206aca22dc26ad4b1ac7d6e0f8fb9bc83b 100644
 --- a/app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt
 +++ b/app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt
 @@ -25,6 +25,10 @@ import me.rerere.rikkahub.data.files.FilesManager
@@ -1191,7 +1191,7 @@ index edc17148c9d48b94110bd41e8cd46356edfec42d..bc1240ce83d5e0b765e10dd68e9705aa
  import java.time.Instant
  import kotlin.uuid.Uuid
  
-@@ -291,16 +295,18 @@ class ConversationRepository(
+@@ -291,16 +295,22 @@ class ConversationRepository(
              }
          }
  
@@ -1211,10 +1211,14 @@ index edc17148c9d48b94110bd41e8cd46356edfec42d..bc1240ce83d5e0b765e10dd68e9705aa
  
 +    suspend fun writePluginDraft(conversation: Conversation) = database.writePluginDraft(conversation)
 +
++    suspend fun pluginDraftIdsOfAssistant(assistantId: Uuid): List<Uuid> =
++        database.pluginConversationDao().drafts().map { JsonInstant.decodeFromString<Conversation>(it) }
++            .filter { it.assistantId == assistantId }.map { it.id }
++
      suspend fun existsConversationById(uuid: Uuid): Boolean {
          return conversationDAO.existsById(uuid.toString())
      }
-@@ -321,6 +327,7 @@ class ConversationRepository(
+@@ -321,6 +331,7 @@ class ConversationRepository(
                  conversationToConversationEntity(conversation)
              )
              saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
@@ -1222,7 +1226,7 @@ index edc17148c9d48b94110bd41e8cd46356edfec42d..bc1240ce83d5e0b765e10dd68e9705aa
          }
          messageFtsManager.indexConversation(conversation)
      }
-@@ -333,6 +340,7 @@ class ConversationRepository(
+@@ -333,6 +344,7 @@ class ConversationRepository(
              // 删除旧的节点，插入新的节点
              messageNodeDAO.deleteByConversation(conversation.id.toString())
              saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
@@ -1230,7 +1234,7 @@ index edc17148c9d48b94110bd41e8cd46356edfec42d..bc1240ce83d5e0b765e10dd68e9705aa
          }
          messageFtsManager.indexConversation(conversation)
      }
-@@ -347,6 +355,7 @@ class ConversationRepository(
+@@ -347,6 +359,7 @@ class ConversationRepository(
          val conversationId = conversation.id.toString()
          messageFtsManager.deleteConversation(conversationId)
          database.withTransaction {
@@ -1239,7 +1243,7 @@ index edc17148c9d48b94110bd41e8cd46356edfec42d..bc1240ce83d5e0b765e10dd68e9705aa
              favoriteDAO.deleteNodeFavoritesOfConversation(conversationId)
              // message_node 会通过 CASCADE 自动删除
 diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
-index 4c324ea08c06e26542735d9bca62eb72ff498983..f1d866fd0a99fef38c06e1f6d1240a97f19aed84 100644
+index 4c324ea08c06e26542735d9bca62eb72ff498983..6cd7e26b45a10a70e0ee443af537908e233c2a67 100644
 --- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
 +++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
 @@ -159,6 +159,8 @@ class ChatService(
@@ -1251,6 +1255,24 @@ index 4c324ea08c06e26542735d9bca62eb72ff498983..f1d866fd0a99fef38c06e1f6d1240a97
          override suspend fun write(previous: Conversation?, current: Conversation) {
              if (previous == null && !conversationRepo.existsConversationById(current.id)) {
                  conversationRepo.insertConversation(current)
+@@ -344,6 +346,7 @@ class ChatService(
+     // 引入会话配置之前创建的会话没有固定配置，加载时按助手当前的值补上，之后不再随助手变化。
+     private suspend fun loadConversation(conversationId: Uuid): Conversation? {
+         val conversation = conversationRepo.getConversationById(conversationId) ?: return null
++        if (conversation.pluginDraft) return conversation
+         // settingsFlow 在启动初期还是占位值，固定配置必须基于真实设置
+         val bound = conversation.bindConfig(settingsStore.awaitLoaded())
+         if (bound !== conversation) conversationRepo.updateConversationConfig(bound)
+@@ -1375,7 +1378,8 @@ class ChatService(
+         val loaded = sessionManager.snapshot()
+             .filter { it.isInitialized && it.state.value.assistantId == assistantId }
+             .map { it.id }
+-        (persisted + loaded).distinct().forEach { deleteConversation(it) }
++        val drafts = conversationRepo.pluginDraftIdsOfAssistant(assistantId)
++        (persisted + loaded + drafts).distinct().forEach { deleteConversation(it) }
+     }
+ 
+     private fun discardQueuedMessages(session: ConversationSession) {
 diff --git a/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt b/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
 index 4bbc5812149be3761f49f48b2a982bd73fdd8d3b..1a6d1b542d35ae6b2cc820c48dc3c4ae86ca9e64 100644
 --- a/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
