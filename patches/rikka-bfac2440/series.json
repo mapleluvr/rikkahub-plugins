@@ -4,7 +4,7 @@
     {
       "id": "optional-firebase",
       "file": "patches/rikka-bfac2440/0001-optional-firebase.patch",
-      "sha256": "6905d2125a0d57e7046bbc37ce79132b9bae0b1af694d54426c31f7d6346e5a9",
+      "sha256": "80978ccde4bd730c9800d5f6d5d14cdbf5427e17b70fd4085849b205f7615ed7",
       "paths": [
         "app/build.gradle.kts",
         "app/src/main/java/me/rerere/rikkahub/di/AppModule.kt",
@@ -15,7 +15,7 @@
     {
       "id": "plugin-build",
       "file": "patches/rikka-bfac2440/0002-plugin-build.patch",
-      "sha256": "f68ab26c81f59f8a08e24cdb888a1ead551483a1c82ddcf4cdd4254bdfb4f70d",
+      "sha256": "715fe5b334cf22f49a0dec76044cbf8f5dc42b9d93f6ce1b922a492c2e0f2af3",
       "paths": [
         ".gitignore",
         "settings.gradle.kts"
@@ -24,7 +24,7 @@
     {
       "id": "agent-control",
       "file": "patches/rikka-bfac2440/0003-agent-control.patch",
-      "sha256": "52622611e86a43376e16cd85b7dc80f87f490d4b258f16eb607e7c84b8da3778",
+      "sha256": "45d39e7d5a91f81c158600d3966534198fa76ea060673599c4aadb08f125802a",
       "paths": [
         "ai/build.gradle.kts",
         "ai/src/main/java/me/rerere/ai/agent/Agent.kt",
@@ -36,7 +36,7 @@
     {
       "id": "conversation-storage",
       "file": "patches/rikka-bfac2440/0004-conversation-storage.patch",
-      "sha256": "6633684783df8311acc3affbce2dc23e8ff49e33919ecd91241b8badbcad575e",
+      "sha256": "ef8995e8d2585e07065cc2fe1ab9200aa76b3fbf30d400a14002be2bb2f069ec",
       "paths": [
         "app/build.gradle.kts",
         "app/schemas/me.rerere.rikkahub.data.db.AppDatabase/35.json",

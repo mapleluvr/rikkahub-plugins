@@ -1,4 +1,4 @@
-From 8b4ef67e4af5991154db0d1acb4a5b6b24e1bb0d Mon Sep 17 00:00:00 2001
+From e2dbbb6c93c2582e340eab6108ea35e013abe888 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 03:33:53 +0800
 Subject: [PATCH] Persist extension state and unpromoted drafts in the
@@ -6,18 +6,18 @@ Subject: [PATCH] Persist extension state and unpromoted drafts in the
 
 Patch-Id: conversation-storage
 ---
- app/build.gradle.kts                          |    3 +
+ app/build.gradle.kts                          |    4 +
  .../35.json                                   | 1065 +++++++++++++++++
  .../me/rerere/rikkahub/data/db/AppDatabase.kt |    8 +-
  .../rikkahub/data/model/Conversation.kt       |    5 +
  .../data/repository/ConversationRepository.kt |   17 +-
  .../me/rerere/rikkahub/service/ChatService.kt |    2 +
- .../rikkahub/service/ConversationSession.kt   |   16 +-
- 7 files changed, 1109 insertions(+), 7 deletions(-)
+ .../rikkahub/service/ConversationSession.kt   |   69 +-
+ 7 files changed, 1156 insertions(+), 14 deletions(-)
  create mode 100644 app/schemas/me.rerere.rikkahub.data.db.AppDatabase/35.json
 
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index df4083126b6f88aab839dee4178292c65b95925d..1facfc8acedf922efb36b53d18d42529044460b6 100644
+index df4083126b6f88aab839dee4178292c65b95925d..b72e9b8bc60c5313021b694b77a2f5aaa5872696 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -118,6 +118,9 @@ android {
@@ -30,6 +30,14 @@ index df4083126b6f88aab839dee4178292c65b95925d..1facfc8acedf922efb36b53d18d42529
          getByName("androidTest").assets.srcDirs("$projectDir/schemas")
      }
      androidResources {
+@@ -198,6 +201,7 @@ configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configu
+ }
+ 
+ dependencies {
++    implementation(project(":plugin-core"))
+     implementation(libs.quickjs)
+     implementation(libs.androidx.core.ktx)
+     implementation(libs.androidx.lifecycle.runtime.ktx)
 diff --git a/app/schemas/me.rerere.rikkahub.data.db.AppDatabase/35.json b/app/schemas/me.rerere.rikkahub.data.db.AppDatabase/35.json
 new file mode 100644
 index 0000000000000000000000000000000000000000..212eda2ac16166f2b5eaf01fc46e955216940f79
@@ -1244,7 +1252,7 @@ index 4c324ea08c06e26542735d9bca62eb72ff498983..f1d866fd0a99fef38c06e1f6d1240a97
              if (previous == null && !conversationRepo.existsConversationById(current.id)) {
                  conversationRepo.insertConversation(current)
 diff --git a/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt b/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
-index 4bbc5812149be3761f49f48b2a982bd73fdd8d3b..96692f8e140855a0bcabd0d2874efdc87b78f1bd 100644
+index 4bbc5812149be3761f49f48b2a982bd73fdd8d3b..1a6d1b542d35ae6b2cc820c48dc3c4ae86ca9e64 100644
 --- a/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
 +++ b/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
 @@ -33,6 +33,11 @@ interface ConversationStore {
@@ -1268,21 +1276,77 @@ index 4bbc5812149be3761f49f48b2a982bd73fdd8d3b..96692f8e140855a0bcabd0d2874efdc8
              }
              synchronized(this) {
                  _state.value = conversation
-@@ -119,9 +124,16 @@ class ConversationSession(
-             if (latest === lastWritten) return@withLock latest
-             // 还没内容的新会话不落库，也不能提前固定配置：会话开始前聊天页的修改要写回助手
-             if (!existsInDatabase && latest.title.isBlank() && latest.messageNodes.isEmpty()) {
-+                if (latest.pluginState.isNotEmpty() || lastWritten.pluginState.isNotEmpty()) {
-+                    store.writeDraft(latest)
-+                    lastWritten = latest
-+                }
-                 return@withLock latest
+@@ -114,19 +119,65 @@ class ConversationSession(
+      */
+     suspend fun flush(): Conversation {
+         if (!isInitialized) return state.value
+-        return writeMutex.withLock {
+-            val latest = state.value
+-            if (latest === lastWritten) return@withLock latest
+-            // 还没内容的新会话不落库，也不能提前固定配置：会话开始前聊天页的修改要写回助手
+-            if (!existsInDatabase && latest.title.isBlank() && latest.messageNodes.isEmpty()) {
+-                return@withLock latest
++        return writeMutex.withLock { flushLocked() }
++    }
++
++    /**
++     * Serializes a receipt and its message changes with all other writes.
++     * [transform] is pure and may be re-evaluated after asynchronous configuration preparation.
++     * Validation runs on the latest state at adoption; persistence writes that exact snapshot.
++     * A failed write returns no receipt. Retrying an idempotent transition still flushes dirty state.
++     */
++    internal suspend fun commitExtension(
++        expectedIncarnation: Int = incarnation,
++        transform: (Conversation) -> Conversation,
++    ): Conversation = writeMutex.withLock {
++        check(isInitialized && incarnation == expectedIncarnation) { "Session was replaced" }
++        var current = synchronized(this) {
++            val before = state.value
++            val proposed = transform(before)
++            require(proposed.id == id)
++            if (isUnpromotedDraft(proposed)) {
++                update { if (proposed == before) before else proposed }
++            } else null
++        }
++        if (current == null) {
++            val prepare = store.prepareWrite()
++            current = update { latest ->
++                val proposed = prepare(transform(latest)).let { if (it.pluginDraft) it.copy(pluginDraft = false) else it }
++                if (proposed == latest) latest else proposed
++            }
++        }
++        persistLocked(checkNotNull(current))
++    }
++
++    private fun isUnpromotedDraft(conversation: Conversation): Boolean =
++        !existsInDatabase && conversation.title.isBlank() && conversation.messageNodes.isEmpty()
++
++    private suspend fun flushLocked(): Conversation {
++        val latest = state.value
++        if (latest === lastWritten) return latest
++        if (isUnpromotedDraft(latest)) return persistLocked(latest)
++        val prepare = store.prepareWrite()
++        val current = update { latestState ->
++            prepare(latestState).let { if (it.pluginDraft) it.copy(pluginDraft = false) else it }
++        }
++        return persistLocked(current)
++    }
++
++    private suspend fun persistLocked(current: Conversation): Conversation {
++        if (current === lastWritten) return current
++        if (isUnpromotedDraft(current)) {
++            if (current.pluginState.isNotEmpty() || lastWritten.pluginState.isNotEmpty()) {
++                store.writeDraft(current)
++                lastWritten = current
              }
 -            val current = update(store.prepareWrite())
-+            val prepare = store.prepareWrite()
-+            val current = update { latestState ->
-+                prepare(latestState).let { if (it.pluginDraft) it.copy(pluginDraft = false) else it }
-+            }
++        } else {
              store.write(previous = lastWritten.takeIf { existsInDatabase }, current = current)
              lastWritten = current
              existsInDatabase = true
+-            current
+         }
++        return current
+     }
+ 
+     /**
