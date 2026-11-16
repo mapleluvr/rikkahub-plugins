@@ -1,4 +1,4 @@
-From 921a57447496c11342515031098292a208a1d290 Mon Sep 17 00:00:00 2001
+From aeb56c8bb60b69a7e643418c416b54aeaaf32724 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 02:41:47 +0800
 Subject: [PATCH] Import plugin runtime module and isolate dependency

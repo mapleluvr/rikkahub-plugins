@@ -1,4 +1,4 @@
-From 11b7473c47ad627deffc53b0b1a93e20b78eb5b5 Mon Sep 17 00:00:00 2001
+From b5638c050f87e2a98c523d63c004b8d19c207922 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 03:09:25 +0800
 Subject: [PATCH] Add generic agent boundaries and provider admission for each
