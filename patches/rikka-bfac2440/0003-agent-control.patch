@@ -1,0 +1,251 @@
+From 6b658016dd76c74bad50515148946a5fd7e46bb1 Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 03:09:25 +0800
+Subject: [PATCH] Add generic agent boundaries and provider admission for each
+ attempt
+
+Patch-Id: agent-control
+---
+ ai/build.gradle.kts                           |  1 +
+ ai/src/main/java/me/rerere/ai/agent/Agent.kt  | 34 +++++++++-
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt | 63 ++++++++++++++++---
+ .../me/rerere/rikkahub/service/ChatService.kt |  2 +
+ settings.gradle.kts                           |  4 ++
+ 5 files changed, 96 insertions(+), 8 deletions(-)
+
+diff --git a/ai/build.gradle.kts b/ai/build.gradle.kts
+index b9e390e7ced626aaf9d891c271dc2605d991f14c..9ad5c3e85d2ab7d231d406027d423456cbc4e68c 100644
+--- a/ai/build.gradle.kts
++++ b/ai/build.gradle.kts
+@@ -7,6 +7,7 @@ plugins {
+ 
+ android {
+     namespace = "me.rerere.ai"
++    sourceSets.getByName("test").kotlin.directories.add("../vendor/rikka-plugin-host/adapters/rikka/ai/src/test/kotlin")
+ 
+     buildFeatures {
+         // 请求体日志只在调试构建里打印，靠 BuildConfig.DEBUG 判断
+diff --git a/ai/src/main/java/me/rerere/ai/agent/Agent.kt b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+index cc27f8de6ccdf8725354d8ccbed6c8eba738ba3a..2e0d71feb4929daee24b41ab60c5afd0ec202e90 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/Agent.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+@@ -24,8 +24,35 @@ data class AgentRequest(
+     /** 最多请求模型的次数 */
+     val maxSteps: Int = 256,
+     val retry: RetryPolicy = RetryPolicy.NONE,
++    /** Logical model steps already consumed by earlier execution segments. */
++    val completedSteps: Int = 0,
++    val resumeCursor: AgentCursor? = null,
++    val control: AgentControl = AgentControl.Default,
+ )
+ 
++/** Generic safe points; business operations are owned by the caller. */
++enum class AgentBoundary { BeforeModel, ToolPreflight, BeforeTool, AfterTools, BeforeComplete }
++
++data class AgentCursor(val boundary: AgentBoundary, val nextStep: Int, val toolCallId: String? = null)
++
++data class AgentBoundaryContext(val cursor: AgentCursor, val message: UIMessage?)
++
++sealed interface AgentDecision {
++    data object Proceed : AgentDecision
++    data class Yield(val token: String) : AgentDecision
++    /** Legal only at BeforeComplete; the notice supplies the next step with new input. */
++    data class Continue(val notice: UIMessagePart.Notice) : AgentDecision
++}
++
++interface AgentControl {
++    suspend fun decide(context: AgentBoundaryContext): AgentDecision = AgentDecision.Proceed
++
++    /** Trusted synchronous admission, repeated immediately before every Provider attempt. */
++    fun admitModel(step: Int, attempt: Int): String? = null
++
++    object Default : AgentControl
++}
++
+ /** 调用方在循环各个节点上的介入点 */
+ interface AgentHooks {
+     /**
+@@ -71,6 +98,9 @@ data class StepRequest(
+ )
+ 
+ sealed interface AgentEvent {
++    /** May precede the first assistant message. The caller owns persistence and rescheduling. */
++    data class Yielded(val message: UIMessage?, val cursor: AgentCursor, val token: String) : AgentEvent
++
+     /** 本轮助手消息的最新内容，整次运行 id 不变 */
+     data class MessageUpdated(val message: UIMessage) : AgentEvent
+ 
+@@ -78,7 +108,7 @@ sealed interface AgentEvent {
+     data class Retrying(val attempt: RetryAttempt) : AgentEvent
+ 
+     /** 运行结束，总是最后一个事件；出错时直接抛出异常，不会发出这个事件 */
+-    data class Finished(val message: UIMessage, val reason: AgentFinishReason) : AgentEvent
++    data class Finished(val message: UIMessage, val reason: AgentFinishReason, val completedSteps: Int = 0) : AgentEvent
+ }
+ 
+ sealed interface AgentFinishReason {
+@@ -104,5 +134,7 @@ sealed interface AgentFinishReason {
+  */
+ fun runAgent(request: AgentRequest, hooks: AgentHooks): Flow<AgentEvent> = flow {
+     require(request.maxSteps > 0) { "maxSteps must be positive" }
++    require(request.completedSteps in 0..request.maxSteps) { "Invalid completed step count" }
++    require(request.resumeCursor == null || request.resumeCursor.nextStep == request.completedSteps) { "Resume cursor and budget disagree" }
+     AgentLoop(request, hooks, this).run()
+ }
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index 30d05ef544bd91c7bdb07d2ac629340e341978d4..73f0eb16aa6ce76327012506b867717997c9411b 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -24,6 +24,7 @@ import kotlin.time.TimeSource
+ private const val EMPTY_TOOL_OUTPUT = "(no output)"
+ 
+ private class StreamChunkHandlingException(override val cause: Throwable) : RuntimeException(cause)
++private class AgentYield(val cursor: AgentCursor, val token: String) : CancellationException(token)
+ 
+ internal class AgentLoop(
+     private val request: AgentRequest,
+@@ -34,6 +35,7 @@ internal class AgentLoop(
+ 
+     // 本轮的助手消息；新的一轮在第一次请求模型时才创建
+     private var message: UIMessage?
++    private var logicalSteps = request.completedSteps
+ 
+     init {
+         val last = request.messages.lastOrNull()
+@@ -47,23 +49,65 @@ internal class AgentLoop(
+     }
+ 
+     suspend fun run() {
+-        var steps = 0
++        try {
++            runSegment()
++        } catch (yield: AgentYield) {
++            events.emit(AgentEvent.Yielded(message, yield.cursor, yield.token))
++        }
++    }
++
++    private suspend fun runSegment() {
++        var generatedHere = false
+         while (true) {
+             val current = message
+             var toolsExecuted = false
+             if (current != null && current.getTools().any { !it.isExecuted }) {
++                if (generatedHere || request.resumeCursor?.boundary != AgentBoundary.BeforeTool) {
++                    boundary(AgentBoundary.ToolPreflight)
++                }
+                 val pending = requestApprovals(current)
+                 if (pending.isNotEmpty()) return finish(AgentFinishReason.AwaitingApproval(pending))
+                 executeTools()
+                 toolsExecuted = true
+-            } else if (current != null && steps > 0) {
+-                return finish(AgentFinishReason.Completed)
++                boundary(AgentBoundary.AfterTools)
++            } else if (current != null && (generatedHere || request.resumeCursor?.boundary == AgentBoundary.BeforeComplete)) {
++                if (!boundary(AgentBoundary.BeforeComplete)) return finish(AgentFinishReason.Completed)
+             }
+-            if (steps == request.maxSteps) return finish(AgentFinishReason.StepLimitReached)
+-            // 只在刚执行完工具时问：接着一条已经执行完的消息继续时不问，否则暂停之后再运行又会立刻暂停
++            if (logicalSteps == request.maxSteps) {
++                if (message == null) throw AgentYield(AgentCursor(AgentBoundary.BeforeModel, logicalSteps), "step-limit")
++                return finish(AgentFinishReason.StepLimitReached)
++            }
++            // Legacy policy remains until the default feature migrates to an operation.
+             if (toolsExecuted && hooks.shouldPause(checkNotNull(message))) return finish(AgentFinishReason.Paused)
++            boundary(AgentBoundary.BeforeModel)
+             generateStep()
+-            steps++
++            logicalSteps++
++            generatedHere = true
++        }
++    }
++
++    /** Returns true only when a completion controller supplied explicit next-step input. */
++    private suspend fun boundary(point: AgentBoundary, toolCallId: String? = null): Boolean {
++        val cursor = AgentCursor(point, logicalSteps, toolCallId)
++        return when (val decision = request.control.decide(AgentBoundaryContext(cursor, message))) {
++            AgentDecision.Proceed -> false
++            is AgentDecision.Yield -> {
++                require(decision.token.isNotBlank())
++                throw AgentYield(cursor, decision.token)
++            }
++            is AgentDecision.Continue -> {
++                require(point == AgentBoundary.BeforeComplete) { "Continue is only valid before completion" }
++                require(decision.notice.text.isNotBlank()) { "Continue requires new input" }
++                val current = checkNotNull(message)
++                update(current.copy(parts = current.parts + decision.notice))
++                true
++            }
++        }
++    }
++
++    private fun admitModel(attempt: Int) {
++        request.control.admitModel(logicalSteps, attempt)?.let { token ->
++            throw AgentYield(AgentCursor(AgentBoundary.BeforeModel, logicalSteps), token)
+         }
+     }
+ 
+@@ -122,8 +166,10 @@ internal class AgentLoop(
+         // 多轮工具调用共用同一条助手消息，消息上已有的 usage 和耗时来自之前的步骤。
+         // 本步从清空的统计开始（merge 只适合同一次请求内的快照），再与之前的步骤累加。
+         val stepStart = base.copy(usage = null, generationTimeMs = null)
++        var attemptNumber = 0
+         return try {
+             withRetry(request.retry, onRetry = { events.emit(AgentEvent.Retrying(it)) }) {
++                admitModel(attemptNumber++)
+                 // 每次重试都从本步开始时的消息重新合并，不会把重试的响应接在已经展示的半截回复后面；
+                 // 各次尝试共用同一个消息 id，调用方直接覆盖即可。
+                 val handler = StreamChunkHandler(params.model)
+@@ -155,7 +201,9 @@ internal class AgentLoop(
+     ): UIMessage {
+         // 非流式拿不到首 token 时间，只能统计最后一次尝试的整个请求耗时
+         var requestMark = TimeSource.Monotonic.markNow()
++        var attemptNumber = 0
+         val result = withRetry(request.retry, onRetry = { events.emit(AgentEvent.Retrying(it)) }) {
++            admitModel(attemptNumber++)
+             requestMark = TimeSource.Monotonic.markNow()
+             request.provider.generateText(request.providerSetting, messages, params)
+         }
+@@ -176,6 +224,7 @@ internal class AgentLoop(
+     private suspend fun executeTools() {
+         val tools = checkNotNull(message).getTools().filter { !it.isExecuted }
+         for (tool in tools) {
++            boundary(AgentBoundary.BeforeTool, tool.toolCallId)
+             // 只给真正运行的工具计时；开始时先写一次，界面才能在执行中实时显示耗时
+             val runs = tool.approvalState == ToolApprovalState.Auto || tool.approvalState == ToolApprovalState.Approved
+             if (runs) updateTool(tool.toolCallId) { it.copy(startedAt = Clock.System.now(), finishedAt = null) }
+@@ -233,7 +282,7 @@ internal class AgentLoop(
+     }
+ 
+     private suspend fun finish(reason: AgentFinishReason) {
+-        events.emit(AgentEvent.Finished(checkNotNull(message), reason))
++        events.emit(AgentEvent.Finished(checkNotNull(message), reason, logicalSteps))
+     }
+ }
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index ec7e8e3a476210da23f64de44697fd91cd0249b3..4c324ea08c06e26542735d9bca62eb72ff498983 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -768,6 +768,8 @@ class ChatService(
+                                 session.processingStatus.value = retryStatus(event.attempt)
+                             }
+ 
++                            is AgentEvent.Yielded -> error("Run controller requires a session coordinator")
++
+                             is AgentEvent.Finished -> {
+                                 Log.i(TAG, "runTurn: finished (${event.reason})")
+                                 finishReason = event.reason
+diff --git a/settings.gradle.kts b/settings.gradle.kts
+index eea89a93b9953876e52902d07997e58e0664e841..83587990548881109c210685122773f5044472f0 100644
+--- a/settings.gradle.kts
++++ b/settings.gradle.kts
+@@ -46,5 +46,9 @@ include(":app:baselineprofile")
+ include(":mediagen")
+ include(":oauth")
+ 
++include(":plugin-protocol", ":plugin-core")
++project(":plugin-protocol").projectDir = file("vendor/rikka-plugin-host/platform/protocol")
++project(":plugin-core").projectDir = file("vendor/rikka-plugin-host/platform/core")
++
+ include(":plugin-runtime-quickjs")
+ project(":plugin-runtime-quickjs").projectDir = file("vendor/rikka-plugin-host/platform/runtime-quickjs")

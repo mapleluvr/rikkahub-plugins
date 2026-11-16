@@ -4,7 +4,7 @@
     {
       "id": "optional-firebase",
       "file": "patches/rikka-bfac2440/0001-optional-firebase.patch",
-      "sha256": "61593c0554d11c9af7ea8b8b28a29b16f1e5a426406f6935855f921c7b3f0184",
+      "sha256": "ffa02570f87d8ac8cdfdb27607b4c3fb3745f2b084f7d4facd96a3d7a1e522f2",
       "paths": [
         "app/build.gradle.kts",
         "app/src/main/java/me/rerere/rikkahub/di/AppModule.kt",
@@ -15,9 +15,21 @@
     {
       "id": "plugin-build",
       "file": "patches/rikka-bfac2440/0002-plugin-build.patch",
-      "sha256": "da1ac30f3cbd3e76f9203cdd08fd4bffb4f6e4d9d32112406b5c99e9acbe509e",
+      "sha256": "2816d89dddf84349ca3c2a969c3c6f3c471ac062e1515a4d98e90d476f9d9365",
       "paths": [
         ".gitignore",
+        "settings.gradle.kts"
+      ]
+    },
+    {
+      "id": "agent-control",
+      "file": "patches/rikka-bfac2440/0003-agent-control.patch",
+      "sha256": "d28cc72fd3c24453d1177dd2429b7df448d620657983d112561965fdd4ce3ffb",
+      "paths": [
+        "ai/build.gradle.kts",
+        "ai/src/main/java/me/rerere/ai/agent/Agent.kt",
+        "ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt",
+        "app/src/main/java/me/rerere/rikkahub/service/ChatService.kt",
         "settings.gradle.kts"
       ]
     }
