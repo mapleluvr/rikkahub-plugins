@@ -81,10 +81,14 @@ class SessionOperationStore(private val session: ConversationSession) {
     }
 
     suspend fun recover() {
-        session.commitExtension(incarnation) { it.withExecutionLedger(OperationLedger.recover(it.executionLedger())) }
+        session.commitExtension(incarnation) {
+            it.withExecutionLedger(OperationLedger.recover(it.executionLedger()))
+        }
     }
 
     suspend fun cancel(id: String) {
-        session.commitExtension(incarnation) { it.withExecutionLedger(OperationLedger.cancel(it.executionLedger(), id)) }
+        session.commitExtension(incarnation) {
+            it.withExecutionLedger(OperationLedger.cancel(it.executionLedger(), id))
+        }
     }
 }

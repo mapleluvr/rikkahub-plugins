@@ -4,13 +4,16 @@ import dev.rikkahub.plugins.protocol.AttemptStatus
 import dev.rikkahub.plugins.protocol.OperationCall
 import dev.rikkahub.plugins.protocol.OperationResult
 import dev.rikkahub.plugins.protocol.RunRef
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonNull
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.selectBranch
+import me.rerere.rikkahub.service.ConversationStore
 import me.rerere.rikkahub.service.ConversationSession
 import me.rerere.rikkahub.service.FakeConversationStore
 import org.junit.Assert.assertEquals
@@ -82,6 +85,44 @@ class SessionOperationStoreTest {
         store.beforeWrite = {}
         operations.prepare(call, initial.pluginSources())
         assertEquals(AttemptStatus.PREPARED, store.persisted!!.executionLedger().operations.getValue(call.id).status)
+    }
+
+    @Test
+    fun sourceValidationRunsAgainAfterSuspendingPreparation() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var saves = 0
+        val store = object : ConversationStore {
+            override suspend fun prepareWrite(): (Conversation) -> Conversation {
+                entered.complete(Unit)
+                release.await()
+                return { it }
+            }
+            override suspend fun write(previous: Conversation?, current: Conversation) { saves++ }
+        }
+        val session = ConversationSession(initial.id, initial, this, store, {})
+        session.initialize({ initial })
+        val pending = async {
+            runCatching { SessionOperationStore(session).prepare(call(initial), initial.pluginSources()) }
+        }
+        entered.await()
+        session.update { it.copy(messageNodes = emptyList()) }
+        release.complete(Unit)
+        assertTrue(pending.await().isFailure)
+        assertTrue(session.state.value.executionLedger().operations.isEmpty())
+        assertEquals(0, saves)
+    }
+
+    @Test
+    fun deletedSessionRejectsCallbacksFromItsPreviousIncarnation() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
+        val store = FakeConversationStore(initial)
+        val session = open(initial, store)
+        val old = SessionOperationStore(session)
+        session.replace(Conversation.ofId(initial.id), false) { store.persisted = null }
+        assertTrue(runCatching { old.prepare(call(initial), emptyList()) }.isFailure)
+        assertTrue(session.state.value.pluginState.isEmpty())
     }
 
     private suspend fun CoroutineScope.open(initial: Conversation, store: FakeConversationStore): ConversationSession =
