@@ -18,7 +18,7 @@ data class BoundaryOperation(
 class SessionAgentRun private constructor(
     private val session: ConversationSession,
     val ref: RunRef,
-    private val policy: (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
+    private val policy: suspend (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
 ) {
     private val store = SessionRunStore(session)
     private var replyNodeId: Uuid = Uuid.random()
@@ -39,12 +39,22 @@ class SessionAgentRun private constructor(
     }
 
     fun bind(request: AgentRequest, nodeId: Uuid): AgentRequest {
-        replyNodeId = nodeId
         val saved = snapshot()
+        replyNodeId = saved.replyNodeId?.let(Uuid::parse) ?: nodeId
+        val definitions = request.tools.associate { tool ->
+            tool.name to listOf(tool.executionVersion, tool.name, tool.description, tool.parameters().toString(),
+                me.rerere.rikkahub.BuildConfig.VERSION_CODE.toString()).joinToString("\n")
+        }
         val control = object : AgentControl {
             override suspend fun decide(context: AgentBoundaryContext): AgentDecision {
                 saveCursor(context.cursor)
                 blocked()?.let { return AgentDecision.Yield(it) }
+                val expected = snapshot().toolDefinitions
+                if (expected.isNotEmpty() && expected != definitions) {
+                    store.addGate(ref, Gate("host.tool-version", GateKind.PLUGIN_FAULT))
+                    return AgentDecision.Yield("Tool definitions changed")
+                }
+                if (expected.isEmpty()) store.update(ref) { it.copy(toolDefinitions = definitions) }
                 val operation = policy(context, ref)
                 if (operation != null) {
                     pending =
@@ -75,8 +85,59 @@ class SessionAgentRun private constructor(
             override fun admitModel(step: Int, attempt: Int): String? = blocked() ?: staleInput()
                 ?: if (snapshot().state.frameRevision != preparedFrame) "Prepared request is stale" else null
 
-            override suspend fun commit(message: UIMessage) {
-                session.commitExtension { it.upsertMessage(replyNodeId, message) }
+            override fun resumeBlock(): String? = blocked()
+
+            override fun admitTool(message: UIMessage, tool: me.rerere.ai.ui.UIMessagePart.Tool): String? =
+                blocked() ?: if (snapshot().state.frameRevision != preparedFrame) "Tool admission changed" else null
+
+            override suspend fun checkpoint(message: UIMessage, next: AgentCursor): String? {
+                var rejected: String? = null
+                session.commitExtension { current ->
+                    val ledger = current.executionLedger()
+                    val saved = ledger.runs.getValue(ref.runId)
+                    require(next.nextStep in saved.nextStep..saved.state.stepsUsed)
+                    var permits = saved.consumedToolPermits
+                    if (next.boundary == AgentBoundary.BeforeTool && next.toolCallId != null) {
+                        val part = message.getTools().single { it.toolCallId == next.toolCallId }
+                        if (part.startedAt != null && !part.isExecuted) {
+                            val previous = current.messageNodes.flatMap { it.messages }
+                                .single { it.id == message.id }.getTools().single { it.toolCallId == part.toolCallId }
+                            val key = "${message.id}/${part.toolCallId}"
+                            rejected = when {
+                                previous.input != part.input || previous.toolName != part.toolName ||
+                                    previous.approvalState != part.approvalState || previous.startedAt != null ->
+                                    "Tool approval or input changed before effect"
+                                saved.state.status != RunStatus.ACTIVE || saved.state.gates.isNotEmpty() ||
+                                    saved.state.frameRevision != preparedFrame -> "Tool admission changed"
+                                saved.toolDefinitions != definitions -> "Tool implementation changed"
+                                key in permits -> "Tool permit already consumed"
+                                else -> null
+                            }
+                            if (rejected != null) {
+                                val waiting = saved.copy(state = RunControl.addGate(
+                                    saved.state, Gate("host.tool-admission", GateKind.PLUGIN_FAULT)))
+                                return@commitExtension current.withExecutionLedger(
+                                    ledger.copy(runs = ledger.runs + (ref.runId to waiting)))
+                            }
+                            permits = permits + (key to listOf(part.toolName, part.input,
+                                part.approvalState.toString(), definitions[part.toolName]).joinToString("\n"))
+                        }
+                    }
+                    val checkpoint = saved.copy(
+                        consumedToolPermits = permits,
+                        boundary = next.boundary.name,
+                        nextStep = next.nextStep,
+                        toolCallId = next.toolCallId,
+                        messageId = next.messageId,
+                        toolBatch = next.toolBatch.map { ToolCallStamp(it.id, it.name, it.input) },
+                        inputIds = (saved.inputIds + message.id.toString()).distinct(),
+                        replyNodeId = replyNodeId.toString(),
+                    )
+                    current.upsertMessage(replyNodeId, message)
+                        .withExecutionLedger(ledger.copy(runs = ledger.runs + (ref.runId to checkpoint)))
+                }
+                if (rejected == null) cursor = next
+                return rejected
             }
         }
         return request.copy(
@@ -91,8 +152,7 @@ class SessionAgentRun private constructor(
         override suspend fun prepareStep(messages: List<UIMessage>): StepRequest {
             val current = session.state.value
             preparedIds = messages.map { it.id.toString() }
-            val sources = current.pluginSources().associateBy { it.id }
-            preparedSources = preparedIds.map { requireNotNull(sources[it]) { "Request source is missing" } }
+            preparedSources = messages.map { it.sourceStamp() }
             return base.prepareStep(current.projectedContext(messages))
         }
     }
@@ -100,9 +160,9 @@ class SessionAgentRun private constructor(
     private fun staleInput(): String? {
         val current = session.state.value
         val sources = current.pluginSources().associateBy { it.id }
-        return if (current.currentMessages.take(preparedIds.size).map { it.id.toString() } != preparedIds ||
-            preparedSources.any { sources[it.id] != it }) {
-            "Request source or selected branch changed"
+        val boundIds = runCatching { current.runInputMessages(ref.runId).map { it.id.toString() } }.getOrNull()
+        return if (boundIds != preparedIds || preparedSources.any { sources[it.id] != it }) {
+            "Request source or bound input path changed"
         } else {
             null
         }
@@ -148,9 +208,15 @@ class SessionAgentRun private constructor(
 
     suspend fun operationFinished() {
         val call = checkNotNull(pending)
-        val sameReply = session.state.value.currentMessages.lastOrNull()?.id?.toString() == cursor?.messageId
+        val current = session.state.value
+        val saved = snapshot()
+        val inserted = current.executionLedger().messageLineages.filterValues { it == call.frame.map { stamp -> stamp.id } }.keys
+        val inputIds = (saved.inputIds + inserted).distinct()
+        val sameReply = inputIds.lastOrNull() == cursor?.messageId
         store.update(ref) {
             it.copy(
+                inputIds = inputIds,
+                replyNodeId = if (sameReply) it.replyNodeId else null,
                 state = RunControl.resolveGate(it.state, call.id),
                 pendingOperation = null,
                 boundary = if (sameReply) it.boundary else AgentBoundary.BeforeModel.name,
@@ -183,38 +249,34 @@ class SessionAgentRun private constructor(
         suspend fun open(
             session: ConversationSession,
             history: List<UIMessage>,
-            policy: (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
+            policy: suspend (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
         ): SessionAgentRun {
             val last = history.lastOrNull()
             val branch =
                 history.lastOrNull { it.role == MessageRole.USER && !it.isContextCheckpoint }?.id?.toString() ?: "draft"
             val ledger = session.state.value.executionLedger()
-            val previous = ledger.runs.values.singleOrNull {
-                it.state.status == RunStatus.ACTIVE && (
-                    (it.messageId != null && it.messageId == last?.id?.toString()) ||
-                        ((it.messageId == null || it.pendingOperation != null) && it.state.ref.branchId == branch)
-                    )
-            }
+            val active = ledger.runs.values.filter { it.state.status == RunStatus.ACTIVE }
+            check(active.size <= 1) { "Multiple active runs require explicit reconciliation" }
+            // Input arrival and UI branch selection never imply cancel/resume of a logical run.
+            val previous = active.singleOrNull()
             val store = SessionRunStore(session)
             val saved = if (previous != null) {
-                if (last?.getTools().orEmpty().none { it.isPending }) {
+                val owningMessage = session.state.value.messageNodes.flatMap { it.messages }
+                    .singleOrNull { it.id.toString() == previous.messageId }
+                if (owningMessage != null && owningMessage.getTools().none { it.isPending }) {
                     store.resolveGate(previous.state.ref, APPROVAL)
                 } else {
                     previous
                 }
             } else {
-                for (old in ledger.runs.values.filter {
-                    it.state.status == RunStatus.ACTIVE
-                }) {
-                    store.cancel(old.state.ref)
-                }
                 val ref = RunRef(
                     session.id.toString(),
                     branch,
                     Uuid.random().toString(),
                     session.incarnation.toLong()
                 )
-                store.create(RunCheckpoint(RunState(ref, 256, 1024), AgentBoundary.BeforeModel.name, 0))
+                store.create(RunCheckpoint(RunState(ref, 256, 1024), AgentBoundary.BeforeModel.name, 0,
+                    inputIds = history.map { it.id.toString() }))
             }
             return SessionAgentRun(session, saved.state.ref, policy).also { controller ->
                 if (previous != null) {
@@ -229,7 +291,9 @@ class SessionAgentRun private constructor(
                         }
                     )
                     if (saved.state.stepsUsed > saved.nextStep ||
-                        last?.getTools().orEmpty().any { !it.isExecuted && it.startedAt != null }) {
+                        session.state.value.messageNodes.flatMap { it.messages }
+                            .firstOrNull { it.id.toString() == saved.messageId }?.getTools().orEmpty()
+                            .any { !it.isExecuted && it.startedAt != null }) {
                         store.addGate(saved.state.ref, Gate("host.recovery", GateKind.PLUGIN_FAULT))
                     }
                     saved.pendingOperation?.let { call ->

@@ -198,12 +198,45 @@ class SessionAgentRunTest {
         assertEquals(1, summaries)
         assertTrue(afterAdoption.state.value.executionLedger().runs.getValue(run.ref.runId).state.gates.isEmpty())
         runAgent(
-            recovered.bind(request(provider, afterAdoption.state.value.currentMessages), Uuid.random()),
+            recovered.bind(request(provider, afterAdoption.state.value.currentMessages).copy(tools = listOf(tool)), Uuid.random()),
             recovered.hooks(hooks)
         ).collect(recovered::accept)
         val final = store.persisted!!.executionLedger().runs.getValue(run.ref.runId)
         assertEquals(2, final.state.stepsUsed)
         assertEquals(2, provider.calls)
+    }
+
+    @Test
+    fun zeroAndPartialOutputWaitsPublishCompletionOnlyAfterResume() = runBlocking {
+        for (partial in listOf(false, true)) {
+            val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("user text")))
+            val store = FakeConversationStore(initial)
+            val session = open(initial, store)
+            val run = SessionAgentRun.open(session, initial.currentMessages) { _, _ -> null }
+            val provider = ScriptedProvider()
+            if (!partial) SessionRunStore(session).addGate(run.ref, Gate("pause", GateKind.USER_PAUSE))
+            var completions = 0
+            val waitingHooks = object : AgentHooks by hooks {
+                override suspend fun finishStep(message: UIMessage, newPartsFrom: Int): UIMessage {
+                    if (partial) SessionRunStore(session).addGate(run.ref, Gate("pause", GateKind.USER_PAUSE))
+                    return message
+                }
+            }
+            runAgent(run.bind(request(provider, initial.currentMessages), Uuid.random()), run.hooks(waitingHooks)).collect {
+                run.accept(it)
+                if (session.state.value.completedRunReply(run.ref) != null) completions++
+            }
+            assertEquals(0, completions)
+            SessionRunStore(session).resolveGate(run.ref, "pause")
+            val resumed = SessionAgentRun.open(session, session.state.value.currentMessages) { _, _ -> null }
+            runAgent(resumed.bind(request(provider, session.state.value.currentMessages), Uuid.random()), resumed.hooks(hooks)).collect {
+                resumed.accept(it)
+                if (it is AgentEvent.Finished && session.state.value.completedRunReply(run.ref) != null) completions++
+            }
+            assertEquals(1, completions)
+            assertEquals("answer", session.state.value.completedRunReply(run.ref)!!.toText())
+            assertEquals(1, provider.calls)
+        }
     }
 
     private suspend fun CoroutineScope.open(initial: Conversation, store: FakeConversationStore) =

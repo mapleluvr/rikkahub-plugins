@@ -33,11 +33,13 @@ data class RunState(
     val stepsUsed: Int = 0,
     val attemptsUsed: Int = 0,
     /** Invalidates prepared input; bookkeeping alone never advances this version. */
-    val frameRevision: Long = 0
+    val frameRevision: Long = 0,
+    val operationStepsUsed: Int = 0
 ) {
     init {
         require(maxSteps > 0 && maxAttempts > 0)
-        require(stepsUsed in 0..maxSteps && attemptsUsed in stepsUsed..maxAttempts)
+        require(stepsUsed >= 0 && operationStepsUsed >= 0 && stepsUsed + operationStepsUsed <= maxSteps)
+        require(attemptsUsed in (stepsUsed + operationStepsUsed)..maxAttempts)
         require(revision >= 0 && frameRevision in 0..revision)
         require(gates.all { (key, value) -> key == value.id && key.isNotBlank() })
     }
@@ -52,7 +54,9 @@ data class OperationCall(
     val handler: PackageLease,
     /** Null means the trusted host/user invoked the operation. */
     val caller: PackageLease? = null,
-    val run: RunRef? = null
+    val run: RunRef? = null,
+    /** Immutable request target captured by the host when accepting the command. */
+    val frame: List<SourceStamp> = emptyList(),
 ) {
     init {
         require(run == null || (run.conversationId == target.conversationId && run.branchId == target.branchId)) {

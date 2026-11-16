@@ -12,6 +12,7 @@ data class OperationContext(
     val attemptId: String,
     val capabilities: Set<String>,
     val beforeEffect: suspend () -> Unit = {},
+    val beforeModelRequest: suspend () -> Unit = beforeEffect,
 )
 
 data class OperationDefinition(
@@ -35,6 +36,7 @@ class OperationRunner(definitions: List<OperationDefinition>) {
         granted: Set<String>,
         attemptId: String,
         timeoutMillis: Long = 30_000,
+        chargeModelAttempt: suspend () -> Unit = {},
         validate: suspend (OperationCall) -> Unit
     ): OperationResult {
         require(call.id.isNotBlank() && attemptId.isNotBlank() && timeoutMillis > 0)
@@ -46,10 +48,18 @@ class OperationRunner(definitions: List<OperationDefinition>) {
         return withTimeout(timeoutMillis) {
             validate(call)
             currentCoroutineContext().ensureActive()
-            val result = operation.execute(OperationContext(call, attemptId, granted.toSet()) {
+            val beforeEffect: suspend () -> Unit = {
                 currentCoroutineContext().ensureActive()
                 validate(call)
-            })
+            }
+            val result = operation.execute(OperationContext(
+                call, attemptId, granted.toSet(), beforeEffect,
+                beforeModelRequest = {
+                    beforeEffect()
+                    chargeModelAttempt()
+                    beforeEffect()
+                },
+            ))
             currentCoroutineContext().ensureActive()
             validate(call)
             result

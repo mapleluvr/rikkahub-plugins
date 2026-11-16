@@ -44,7 +44,7 @@ object RunControl {
             state.gates.isNotEmpty() -> "Run has unresolved gates"
             preparedFrameRevision != state.frameRevision -> "Prepared request is stale"
             step < 0 || step < state.stepsUsed - 1 || step > state.stepsUsed -> "Invalid step cursor"
-            step == state.stepsUsed && state.stepsUsed >= state.maxSteps -> "Model step budget exhausted"
+            step == state.stepsUsed && state.stepsUsed + state.operationStepsUsed >= state.maxSteps -> "Model step budget exhausted"
             state.attemptsUsed >= state.maxAttempts -> "Request attempt budget exhausted"
             else -> null
         }

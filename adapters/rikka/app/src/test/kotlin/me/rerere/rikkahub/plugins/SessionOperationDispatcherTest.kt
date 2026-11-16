@@ -202,6 +202,88 @@ class SessionOperationDispatcherTest {
         assertTrue(store.persisted!!.currentMessages[1].isContextCheckpoint)
     }
 
+    @Test
+    fun timeoutAndRecoveredAttemptCannotUseDefaultFailureFallback() = runBlocking {
+        val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
+        val store = FakeConversationStore(source)
+        val session = session(source, store)
+        val feature = BuiltinContextFeature { _, _, _, _ -> awaitCancellation() }
+        val dispatcher = SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }
+        val call = source.operationCall(feature.operation, feature.input())
+        val outcome = dispatcher.dispatch(session, call, timeoutMillis = 20)
+        assertTrue(outcome is OperationDispatch.NeedsReconciliation)
+        assertFalse(dispatcher.mayResumeAfter(call, outcome))
+        assertEquals(AttemptStatus.UNKNOWN, store.persisted!!.executionLedger().operations.getValue(call.id).status)
+        val reopened = session(source, store)
+        val recovered = dispatcher.dispatch(reopened, call)
+        assertTrue(recovered is OperationDispatch.NeedsReconciliation)
+        assertFalse(dispatcher.mayResumeAfter(call, recovered))
+    }
+
+    @Test
+    fun preflightRejectionIsDurableAndStableButStorageFailureRequiresExplicitRetry() = runBlocking {
+        val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
+        val store = FakeConversationStore(source)
+        val session = session(source, store)
+        var preparations = 0
+        val operation = ConversationOperation("reject", "reject", PackageLease("test", "v1", 1), emptySet(), true) { _, _ ->
+            preparations++
+            error("unchanged invalid input")
+        }
+        val dispatcher = SessionOperationDispatcher(listOf(operation)) { _, _ -> true }
+        val call = source.operationCall(operation, JsonNull)
+        repeat(3) {
+            val outcome = dispatcher.dispatch(session, call)
+            assertTrue(outcome is OperationDispatch.Rejected)
+            assertTrue(dispatcher.mayResumeAfter(call, outcome))
+        }
+        assertEquals(1, preparations)
+        assertEquals(AttemptStatus.CANCELLED, store.persisted!!.executionLedger().operations.getValue(call.id).status)
+        store.beforeWrite = { error("disk unavailable") }
+        val blocked = dispatcher.dispatch(session, source.operationCall(operation, JsonNull, "next"))
+        assertTrue(blocked is OperationDispatch.StorageBlocked)
+        assertFalse(dispatcher.mayResumeAfter(call, blocked))
+        assertFalse("next" in session.state.value.executionLedger().operations)
+    }
+
+    @Test
+    fun everySummaryNetworkAttemptConsumesOperationAndOwningRunBudget() = runBlocking {
+        val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
+        val store = FakeConversationStore(source)
+        val session = session(source, store)
+        val run = SessionAgentRun.open(session, source.currentMessages) { _, _ -> null }
+        SessionRunStore(session).update(run.ref) { it.copy(state = it.state.copy(maxAttempts = 2)) }
+        var dispatched = 0
+        val feature = BuiltinContextFeature { _, _, _, beforeDispatch ->
+            repeat(3) { beforeDispatch(); dispatched++ }
+            "should not settle"
+        }
+        val call = session.state.value.operationCall(feature.operation, feature.input(), run = run.ref)
+        val dispatcher = SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }
+        val outcome = dispatcher.dispatch(session, call)
+        assertTrue(outcome is OperationDispatch.NeedsReconciliation)
+        assertEquals(2, dispatched)
+        assertEquals(2, store.persisted!!.executionLedger().runs.getValue(run.ref.runId).state.attemptsUsed)
+    }
+
+    @Test
+    fun settledReceiptCannotBeReadThroughRevokedAuthorityOrReusedIdentity() = runBlocking {
+        val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
+        val session = session(source, FakeConversationStore(source))
+        var allowed = true
+        val operation = ConversationOperation("report", "report", PackageLease("test", "v1", 1), emptySet()) { snapshot, _ ->
+            PreparedConversationOperation(snapshot.pluginSources(), { OperationResult() })
+        }
+        val dispatcher = SessionOperationDispatcher(listOf(operation)) { _, _ -> allowed }
+        val call = source.operationCall(operation, JsonNull)
+        assertTrue(dispatcher.dispatch(session, call) is OperationDispatch.Settled)
+        allowed = false
+        assertTrue(dispatcher.dispatch(session, call) is OperationDispatch.NeedsReconciliation)
+        allowed = true
+        assertTrue(dispatcher.dispatch(session, call.copy(input = JsonPrimitive("different"))) is OperationDispatch.NeedsReconciliation)
+        assertEquals(call, session.state.value.executionLedger().operations.getValue(call.id).call)
+    }
+
     private suspend fun CoroutineScope.session(source: Conversation, store: FakeConversationStore) =
         ConversationSession(source.id, source, this, store, {}).also { it.initialize({ store.persisted }) }
 }

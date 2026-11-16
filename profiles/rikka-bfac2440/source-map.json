@@ -156,6 +156,46 @@
     {
       "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/BuiltinContextPolicyTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/BuiltinContextPolicyTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/ChatServiceRecoveryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/ChatServiceRecoveryTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/RoomExecutionRecoveryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/RoomExecutionRecoveryTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ConversationInputFrame.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ConversationInputFrame.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/RunCompletion.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/RunCompletion.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/SessionExecutionLifecycle.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/SessionExecutionLifecycle.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/BoundOperationFrameTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/BoundOperationFrameTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ConfirmedSessionCommitTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ConfirmedSessionCommitTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/PersistedExecutionBoundaryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/PersistedExecutionBoundaryTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/PersistentRunLifecycleTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/PersistentRunLifecycleTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ToolApprovalBindingTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ToolApprovalBindingTest.kt"
     }
   ]
 }

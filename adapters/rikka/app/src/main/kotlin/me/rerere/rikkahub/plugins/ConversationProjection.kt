@@ -22,11 +22,15 @@ fun Conversation.validateOperationOutput(
 }
 
 fun Conversation.projectedContext(messages: List<UIMessage>): List<UIMessage> {
-    val present = messages.mapTo(HashSet()) { it.id.toString() }
-    val sources = pluginSources().associateBy { it.id }
+    val input = messages.map { it.sourceStamp() }
+    val sources = input.associateBy { it.id }
+    val items = messages.contextItems()
+    val protected = items.filter { it.protected }.mapTo(HashSet()) { it.id }
     val omit = executionLedger().operations.values.filter {
         it.status == AttemptStatus.SETTLED && it.result?.projection != null &&
-            it.sources.all { stamp -> stamp.id in present && sources[stamp.id] == stamp }
+            it.call.frame.isNotEmpty() && input.take(it.call.frame.size) == it.call.frame &&
+            it.sources.all { stamp -> sources[stamp.id] == stamp } &&
+            it.result?.projection?.omit?.none { id -> id in protected } == true
     }.flatMap { it.result!!.projection!!.omit }.toSet()
     if (omit.isEmpty()) return messages
     val projected = ContextProjection.apply(messages.contextItems(), dev.rikkahub.plugins.protocol.ProjectionPlan(omit))

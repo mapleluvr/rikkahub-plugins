@@ -23,6 +23,7 @@ import me.rerere.rikkahub.plugins.BoundaryOperation
 import me.rerere.rikkahub.plugins.ConversationOperation
 import me.rerere.rikkahub.plugins.PreparedConversationOperation
 import me.rerere.rikkahub.plugins.executionLedger
+import me.rerere.rikkahub.plugins.forInputPath
 import me.rerere.rikkahub.plugins.pluginSources
 import me.rerere.rikkahub.utils.JsonInstant
 import java.util.Locale
@@ -54,6 +55,31 @@ class BuiltinContextFeature(
         }
 
     fun input(options: CompactInput = CompactInput()): JsonElement = JsonInstant.encodeToJsonElement(options)
+
+    suspend fun boundaryDecision(
+        session: me.rerere.rikkahub.service.ConversationSession,
+        ref: dev.rikkahub.plugins.protocol.RunRef,
+        boundary: AgentBoundaryContext,
+        settings: Settings,
+        model: Model,
+        allowHistoryRewrite: Boolean,
+        afterOperation: Boolean,
+    ): BoundaryOperation? {
+        val saved = session.state.value.executionLedger().runs.getValue(ref.runId)
+        val noBenefit = "$FEATURE/no-benefit"
+        if (noBenefit in saved.featureFlags) return null
+        val reply = boundary.message
+        if (afterOperation && boundary.cursor.boundary == AgentBoundary.AfterTools &&
+            (reply?.stepCount ?: 0) <= 1 &&
+            (reply?.contextTokens() ?: 0) >= model.contextLength * settings.autoCompressThreshold) {
+            me.rerere.rikkahub.plugins.SessionRunStore(session).update(ref) {
+                it.copy(featureFlags = it.featureFlags + noBenefit)
+            }
+            return null
+        }
+        val source = session.state.value.forInputPath(saved.inputIds)
+        return boundaryOperation(boundary, source, settings, model, allowHistoryRewrite, afterOperation)
+    }
 
     fun boundaryOperation(
         boundary: AgentBoundaryContext,
@@ -90,7 +116,7 @@ class BuiltinContextFeature(
     }
 
     private fun prepare(source: Conversation, input: CompactInput): PreparedConversationOperation {
-        val nodes = source.messageNodes
+        val nodes = source.visibleMessageNodes
         val checkpoint = nodes.indexOfLast { it.currentMessage.isContextCheckpoint }
         val end = nodes.size - input.keepRecentMessages.coerceAtLeast(0)
         require(end > checkpoint + 1) { "没有可压缩的消息" }
@@ -105,7 +131,7 @@ class BuiltinContextFeature(
         return PreparedConversationOperation(
             sources = ids.map(stamps::getValue),
             execute = { invocation ->
-                val text = summarize(source, selected, prompt, invocation.beforeEffect)
+                val text = summarize(source, selected, prompt, invocation.beforeModelRequest)
                 require(text.isNotBlank()) { "摘要为空" }
                 OperationResult(artifacts = listOf(ArtifactDraft("context.summary", JsonPrimitive(text))))
             },

@@ -15,7 +15,9 @@ data class OperationRecord(
     val sources: List<SourceStamp>,
     val status: AttemptStatus = AttemptStatus.PREPARED,
     val attemptId: String? = null,
-    val result: OperationResult? = null
+    val result: OperationResult? = null,
+    val modelAttempts: Int = 0,
+    val maxModelAttempts: Int = 8
 )
 
 @Serializable
@@ -30,12 +32,20 @@ data class RunCheckpoint(
     val messageId: String? = null,
     val toolBatch: List<ToolCallStamp> = emptyList(),
     val pendingOperation: OperationCall? = null,
+    /** Logical input path; independent of the UI's currently selected alternatives. */
+    val inputIds: List<String> = emptyList(),
+    val replyNodeId: String? = null,
+    val featureFlags: Set<String> = emptySet(),
+    val toolDefinitions: Map<String, String> = emptyMap(),
+    val consumedToolPermits: Map<String, String> = emptyMap(),
 )
 
 /** One versioned host envelope. Unknown envelope versions must never execute. */
 @Serializable
 data class ExecutionLedger(
-    val version: Int = 2,
+    val version: Int = 3,
     val runs: Map<String, RunCheckpoint> = emptyMap(),
-    val operations: Map<String, OperationRecord> = emptyMap()
+    val operations: Map<String, OperationRecord> = emptyMap(),
+    /** Host-inserted messages are visible only on their source path. */
+    val messageLineages: Map<String, List<String>> = emptyMap(),
 )

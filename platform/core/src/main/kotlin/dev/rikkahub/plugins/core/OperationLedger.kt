@@ -72,7 +72,7 @@ object OperationLedger {
     }
 
     private fun validate(ledger: ExecutionLedger) {
-        require(ledger.version == 2) { "Unsupported execution ledger version" }
+        require(ledger.version == 3) { "Unsupported execution ledger version" }
         require(ledger.operations.all { (id, record) -> id == record.call.id }) { "Invalid receipt identity" }
     }
 

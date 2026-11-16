@@ -9,6 +9,7 @@ import dev.rikkahub.plugins.protocol.SourceStamp
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
+import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.service.ConversationSession
 import me.rerere.rikkahub.utils.JsonInstant
@@ -19,7 +20,7 @@ private const val HOST_LEDGER = "host.execution"
 fun Conversation.executionLedger(): ExecutionLedger {
     val payload = pluginState[HOST_LEDGER] ?: return ExecutionLedger()
     val ledger = JsonInstant.decodeFromJsonElement<ExecutionLedger>(payload)
-    require(ledger.version == 2) { "Unsupported execution ledger; preserved without execution" }
+    require(ledger.version == 3) { "Unsupported execution ledger; preserved without execution" }
     return ledger
 }
 
@@ -28,14 +29,16 @@ fun Conversation.withExecutionLedger(ledger: ExecutionLedger): Conversation = co
 )
 
 /** All branches are addressed by stable message identity, independently of the visible selection. */
+fun UIMessage.sourceStamp(): SourceStamp {
+    val content = JsonInstant.encodeToString(parts)
+    val digest = MessageDigest.getInstance("SHA-256").digest(
+        "$role:$content".toByteArray(Charsets.UTF_8)
+    ).joinToString("") { "%02x".format(it) }
+    return SourceStamp(id.toString(), digest)
+}
+
 fun Conversation.pluginSources(): List<SourceStamp> = messageNodes.flatMap { node ->
-    node.messages.map { message ->
-        val content = JsonInstant.encodeToString(message.parts)
-        val digest = MessageDigest.getInstance("SHA-256").digest(
-            "${message.role}:$content".toByteArray(Charsets.UTF_8)
-        ).joinToString("") { "%02x".format(it) }
-        SourceStamp(message.id.toString(), digest)
-    }
+    node.messages.map { it.sourceStamp() }
 }
 
 /**
@@ -47,7 +50,8 @@ class SessionOperationStore(private val session: ConversationSession) {
     suspend fun prepare(call: OperationCall, sources: List<SourceStamp>): OperationRecord {
         require(call.target.conversationId == session.id.toString())
         val saved = session.commitExtension(incarnation) {
-            require(sources.all { stamp -> stamp in it.pluginSources() }) { "Source is stale" }
+            val index = it.pluginSources().associateBy { stamp -> stamp.id }
+            require(sources.all { stamp -> index[stamp.id] == stamp }) { "Source is stale" }
             it.withExecutionLedger(OperationLedger.prepare(it.executionLedger(), call, sources))
         }
         return saved.executionLedger().operations.getValue(call.id)
@@ -56,7 +60,8 @@ class SessionOperationStore(private val session: ConversationSession) {
     suspend fun start(id: String, attemptId: String): OperationRecord {
         val saved = session.commitExtension(incarnation) {
             val record = it.executionLedger().operations.getValue(id)
-            require(record.sources.all { stamp -> stamp in it.pluginSources() }) { "Source is stale" }
+            val index = it.pluginSources().associateBy { stamp -> stamp.id }
+            require(record.sources.all { stamp -> index[stamp.id] == stamp }) { "Source is stale" }
             it.withExecutionLedger(OperationLedger.start(it.executionLedger(), id, attemptId))
         }
         return saved.executionLedger().operations.getValue(id)
@@ -75,8 +80,45 @@ class SessionOperationStore(private val session: ConversationSession) {
             if (settled === ledger) {
                 current
             } else {
-                applyResult(current).withExecutionLedger(settled)
+                val adopted = applyResult(current)
+                val existing = current.messageNodes.flatMap { node -> node.messages }
+                    .mapTo(HashSet()) { message -> message.id.toString() }
+                val inserted = adopted.messageNodes.flatMap { node -> node.messages }
+                    .map { message -> message.id.toString() }.filter { id -> id !in existing }
+                adopted.withExecutionLedger(settled.copy(
+                    messageLineages = settled.messageLineages + inserted.associateWith { call.frame.map { stamp -> stamp.id } }
+                ))
             }
+        }
+    }
+
+    /** One model job per operation; each actual network retry is separately charged. */
+    suspend fun chargeModelAttempt(call: OperationCall, validate: (Conversation) -> Unit) {
+        session.commitExtension(incarnation) { current ->
+            validate(current)
+            val ledger = current.executionLedger()
+            val record = ledger.operations.getValue(call.id)
+            check(record.status == dev.rikkahub.plugins.protocol.AttemptStatus.RUNNING)
+            check(record.modelAttempts < record.maxModelAttempts) { "Operation request budget exhausted" }
+            var runs = ledger.runs
+            call.run?.let { ref ->
+                val run = runs.getValue(ref.runId)
+                val state = run.state
+                check(state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE)
+                check(state.gates.values.all { it.id == call.id }) { "Owning run is paused" }
+                check(state.attemptsUsed < state.maxAttempts) { "Owning run request budget exhausted" }
+                val newStep = if (record.modelAttempts == 0) 1 else 0
+                check(state.stepsUsed + state.operationStepsUsed + newStep <= state.maxSteps) { "Owning run model budget exhausted" }
+                runs = runs + (ref.runId to run.copy(state = state.copy(
+                    attemptsUsed = state.attemptsUsed + 1,
+                    operationStepsUsed = state.operationStepsUsed + newStep,
+                    revision = state.revision + 1,
+                )))
+            }
+            current.withExecutionLedger(ledger.copy(
+                runs = runs,
+                operations = ledger.operations + (call.id to record.copy(modelAttempts = record.modelAttempts + 1)),
+            ))
         }
     }
 
