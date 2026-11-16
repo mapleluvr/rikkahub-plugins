@@ -2,7 +2,7 @@
 
 RikkaHub 插件宿主维护仓库：固定上游源码、重放适配补丁、导入插件平台，构建独立发行版。
 
-当前处于 P0 实施，尚无可安装的插件宿主发行版。实施和验证状态见 [工作入口](docs/OVERVIEW.md)，工程约定见 [仓库设计](docs/state/plugin-patch-repository.md)。
+P0/P1 已完成，正在实施 P2 持久化与恢复；尚无可安装的插件宿主发行版。实施和验证状态见 [工作入口](docs/OVERVIEW.md)，工程约定见 [仓库设计](docs/state/plugin-patch-repository.md)。
 
 ## 开发
 
