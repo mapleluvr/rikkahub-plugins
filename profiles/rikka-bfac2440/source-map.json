@@ -64,6 +64,10 @@
     {
       "from": "platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/Execution.kt",
       "to": "vendor/rikka-plugin-host/platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/Execution.kt"
+    },
+    {
+      "from": "adapters/rikka/ai/src/test/kotlin/me/rerere/ai/agent/AgentControlContractTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/ai/src/test/kotlin/me/rerere/ai/agent/AgentControlContractTest.kt"
     }
   ]
 }
