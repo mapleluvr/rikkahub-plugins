@@ -1,0 +1,737 @@
+From 8019bacd70a7b12c8f3defd0be1615f7f805bad5 Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 07:57:12 +0800
+Subject: [PATCH] Bind approval lifecycle and resource admission across session
+ recovery
+
+Patch-Id: approval-recovery-bindings
+---
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt |  6 ++-
+ ai/src/main/java/me/rerere/ai/core/Tool.kt    |  2 +
+ .../java/me/rerere/ai/ui/UIMessagePart.kt     |  3 ++
+ .../rerere/rikkahub/data/ai/mcp/McpConfig.kt  |  2 +
+ .../rerere/rikkahub/data/ai/mcp/McpManager.kt | 15 ++++--
+ .../data/ai/mcp/McpOAuthCoordinator.kt        |  1 +
+ .../data/ai/mcp/McpSessionRegistry.kt         | 53 ++++++++++++-------
+ .../rikkahub/data/ai/tools/ChatToolFactory.kt | 11 ++--
+ .../rikkahub/data/ai/tools/WorkspaceTools.kt  | 13 +++++
+ .../data/datastore/PreferencesStore.kt        |  3 +-
+ .../rikkahub/data/model/ConversationFork.kt   |  7 ++-
+ .../data/model/ConversationMessages.kt        | 27 ++--------
+ .../data/repository/WorkspaceRepository.kt    |  6 ++-
+ .../me/rerere/rikkahub/service/ChatService.kt | 40 +++++++-------
+ .../ui/components/message/ChatMessageTools.kt | 10 ++--
+ .../ui/floating/ChatFloatingContent.kt        |  2 +-
+ .../java/me/rerere/rikkahub/web/dto/WebDto.kt |  4 +-
+ .../rikkahub/web/routes/ConversationRoutes.kt |  2 +-
+ .../data/model/ConversationMessagesTest.kt    |  7 ++-
+ .../components/message/parts/tool-part.tsx    | 12 ++---
+ web-ui/app/routes/conversations.tsx           |  4 +-
+ web-ui/app/types/parts.ts                     |  1 +
+ 22 files changed, 136 insertions(+), 95 deletions(-)
+
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index 2c35f3db32193b08a72f2933b7aff486e360c223..8981294a2f8955a7dddfd225bef9ca190117e490 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -300,12 +300,16 @@ internal class AgentLoop(
+             // 只给真正运行的工具计时；开始时先写一次，界面才能在执行中实时显示耗时
+             val runs = tool.approvalState == ToolApprovalState.Auto || tool.approvalState == ToolApprovalState.Approved
+             if (runs) {
++                findTool(tool.toolName)?.validateExecution?.invoke()?.let {
++                    throw AgentYield(cursor(AgentBoundary.BeforeTool, tool.toolCallId), it)
++                }
+                 updateTool(
+                     tool.toolCallId,
+                     starting = true
+                 ) { it.copy(startedAt = Clock.System.now(), finishedAt = null) }
+                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
+-                request.control.admitTool(checkNotNull(message), tool)?.let {
++                val resourceFailure = findTool(tool.toolName)?.validateExecution?.invoke()
++                (resourceFailure ?: request.control.admitTool(checkNotNull(message), tool))?.let {
+                     throw AgentYield(cursor(AgentBoundary.BeforeTool, tool.toolCallId), it)
+                 }
+             }
+diff --git a/ai/src/main/java/me/rerere/ai/core/Tool.kt b/ai/src/main/java/me/rerere/ai/core/Tool.kt
+index a2c8e87c1f70bbbd38c8cd70c00fce0f6b5ab91e..213ddc3f7b74a54fbcfae80506fb4874a2a66569 100644
+--- a/ai/src/main/java/me/rerere/ai/core/Tool.kt
++++ b/ai/src/main/java/me/rerere/ai/core/Tool.kt
+@@ -17,6 +17,8 @@ data class Tool(
+     val needsApproval: (JsonElement) -> Boolean = { false },
+     /** Version of the executable implementation; plugin registrations use their package lease. */
+     val executionVersion: String = "host-v1",
++    /** Revalidate the captured resource and policy before consuming execution permission. */
++    val validateExecution: suspend () -> String? = { null },
+     val execute: suspend (JsonElement) -> List<UIMessagePart>
+ )
+ 
+diff --git a/ai/src/main/java/me/rerere/ai/ui/UIMessagePart.kt b/ai/src/main/java/me/rerere/ai/ui/UIMessagePart.kt
+index acaea8b3643460b02323a50dd2870cd64790b20d..270bd1811576c2faaf23c20fc42f70f1b6deb5c0 100644
+--- a/ai/src/main/java/me/rerere/ai/ui/UIMessagePart.kt
++++ b/ai/src/main/java/me/rerere/ai/ui/UIMessagePart.kt
+@@ -191,6 +191,8 @@ sealed class UIMessagePart {
+         // 本地执行的起止时间，只统计真正运行工具的耗时；拒绝、问答和旧消息都为空
+         val startedAt: Instant? = null,
+         val finishedAt: Instant? = null,
++        /** Local host approval request identity; never a provider tool-call ID. */
++        val approvalId: String? = null,
+     ) : UIMessagePart() {
+         /** Whether the tool has been executed (has output) */
+         val isExecuted: Boolean get() = output.isNotEmpty()
+@@ -216,6 +218,7 @@ sealed class UIMessagePart {
+                 metadata = if (other.metadata != null) other.metadata else metadata,
+                 startedAt = startedAt,
+                 finishedAt = finishedAt,
++                approvalId = approvalId,
+             )
+         }
+     }
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpConfig.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpConfig.kt
+index 7d1bde399a78512d44ffefd1d84df7f7cae954b7..694d560eb31b670cf37b7fe44c172b184e95617a 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpConfig.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpConfig.kt
+@@ -12,6 +12,7 @@ data class McpCommonOptions(
+     val headers: List<Pair<String, String>> = emptyList(),
+     val tools: List<McpTool> = emptyList(),
+     val oauth: McpOAuthState? = null,
++    val executionRevision: String = "",
+ )
+ 
+ /**
+@@ -23,6 +24,7 @@ data class McpCommonOptions(
+ @Serializable
+ data class McpOAuthState(
+     val enabled: Boolean = false,
++    val grantId: String = "",
+     val clientId: String? = null,
+     val clientSecret: String? = null,
+     val authorizationEndpoint: String? = null,
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpManager.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpManager.kt
+index 5f1969c7208c42fdf132224719fdc4142dc5c503..726a0b921866fed0646ef107cb7249fc1abe8a3b 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpManager.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpManager.kt
+@@ -28,6 +28,7 @@ import me.rerere.rikkahub.data.files.FilesManager
+ import me.rerere.rikkahub.data.files.saveUploadFromBytes
+ import me.rerere.rikkahub.data.model.Assistant
+ import me.rerere.rikkahub.utils.JsonInstant
++import me.rerere.rikkahub.plugins.toolExecutionVersion
+ import okhttp3.OkHttpClient
+ import java.util.concurrent.TimeUnit
+ import kotlin.io.encoding.Base64
+@@ -39,6 +40,8 @@ import kotlin.uuid.Uuid
+  * 这里仅协调配置、OAuth、连接注册表与 UI 内容转换；单个服务器的连接状态机由
+  * [McpSessionRegistry] 管理，OAuth 协议细节由 [McpOAuthCoordinator] 管理。
+  */
++data class McpToolRegistration(val serverId: Uuid, val serverName: String, val tool: McpTool, val executionVersion: String)
++
+ class McpManager(
+     private val settingsStore: SettingsStore,
+     private val appScope: AppScope,
+@@ -103,20 +106,24 @@ class McpManager(
+ 
+     fun getStatus(config: McpServerConfig): Flow<McpStatus> = sessionRegistry.getStatus(config.id)
+ 
+-    fun getAllAvailableTools(assistant: Assistant): List<Triple<Uuid, String, McpTool>> {
++    fun getAllAvailableTools(assistant: Assistant): List<McpToolRegistration> {
+         val settings = settingsStore.settingsFlow.value
+         return settings.mcpServers
+             .filter { it.commonOptions.enable && it.id in assistant.mcpServers }
+             .flatMap { server ->
+                 server.commonOptions.tools
+                     .filter { tool -> tool.enable }
+-                    .map { tool -> Triple(server.id, server.commonOptions.name, tool) }
++                    .map { tool -> McpToolRegistration(server.id, server.commonOptions.name, tool,
++                        checkNotNull(server.toolExecutionVersion(tool.name))) }
+             }
+     }
+ 
+-    suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject): List<UIMessagePart> {
++    fun toolExecutionVersion(serverId: Uuid, toolName: String): String? =
++        settingsStore.settingsFlow.value.mcpServers.singleOrNull { it.id == serverId }?.toolExecutionVersion(toolName)
++
++    suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject, expectedVersion: String? = null): List<UIMessagePart> {
+         val result = try {
+-            sessionRegistry.callTool(serverId, toolName, args)
++            sessionRegistry.callTool(serverId, toolName, args, expectedVersion)
+         } catch (e: CancellationException) {
+             throw e
+         } catch (e: McpClientUnavailableException) {
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpOAuthCoordinator.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpOAuthCoordinator.kt
+index 77de54f736ddec0699775dfe8a5671338ac6fb97..3c45123bdd2aba8835214f8c6b998ef9e156b6eb 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpOAuthCoordinator.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpOAuthCoordinator.kt
+@@ -238,6 +238,7 @@ internal class McpOAuthCoordinator(
+                 config.id,
+                 McpOAuthState(
+                     enabled = true,
++                    grantId = Uuid.random().toString(),
+                     clientId = clientId,
+                     clientSecret = clientSecret,
+                     authorizationEndpoint = authorizationEndpoint,
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpSessionRegistry.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpSessionRegistry.kt
+index 6a182640a9cfb27b2a6b6bcc1294a7a639cf5f5c..e4211803eddbf013f2a335a015f67d603bd50ed7 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpSessionRegistry.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpSessionRegistry.kt
+@@ -35,6 +35,7 @@ import kotlinx.coroutines.withContext
+ import kotlinx.serialization.json.JsonObject
+ import me.rerere.rikkahub.AppScope
+ import me.rerere.rikkahub.data.datastore.SettingsStore
++import me.rerere.rikkahub.plugins.toolExecutionVersion
+ import java.util.concurrent.ConcurrentHashMap
+ import kotlin.time.Duration.Companion.seconds
+ import kotlin.uuid.Uuid
+@@ -130,11 +131,13 @@ internal class McpSessionRegistry(
+             existing.config = newConfig
+             if (mustReconnect) {
+                 appScope.launch { addClient(newConfig) }
++            } else if (hasSameConnectionParameters(existing.connectedConfig, newConfig)) {
++                existing.connectedConfig = newConfig
+             }
+         }
+     }
+ 
+-    suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject): CallToolResult {
++    suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject, expectedVersion: String? = null): CallToolResult {
+         val session = sessions[serverId]
+             ?: throw McpClientUnavailableException("No MCP session for server $serverId")
+         val freshConfig = oauthCoordinator.ensureFreshToken(session.config)
+@@ -143,24 +146,36 @@ internal class McpSessionRegistry(
+             addClient(freshConfig)
+         }
+ 
+-        val sdkClient = session.client
+-            ?: throw McpClientUnavailableException("MCP client $serverId is not connected")
+-        val config = session.connectedConfig ?: session.config
+-        Log.i(TAG, "Calling tool $toolName on $serverId (${config.commonOptions.name})")
+-        return try {
+-            sdkClient.callTool(
+-                request = CallToolRequest(
+-                    params = CallToolRequestParams(name = toolName, arguments = args),
+-                ),
+-                options = RequestOptions(timeout = 120.seconds),
+-            )
+-        } catch (e: CancellationException) {
+-            throw e
+-        } catch (e: Exception) {
+-            if (oauthCoordinator.needsAuthorization(config, e)) {
+-                statusStore.update(config.id, McpStatus.NeedsAuthorization)
++        return session.lifecycleMutex.withLock {
++            val sdkClient = session.client
++                ?: throw McpClientUnavailableException("MCP client $serverId is not connected")
++            val config = checkNotNull(session.connectedConfig)
++            val current = settingsStore.settingsFlow.value.mcpServers.singleOrNull { it.id == serverId }
++            check(sessions[serverId] === session && hasSameConnectionParameters(config, current)) {
++                "MCP connection changed before dispatch"
++            }
++            if (expectedVersion != null) {
++                check(current?.toolExecutionVersion(toolName) == expectedVersion &&
++                    config.toolExecutionVersion(toolName) == expectedVersion) {
++                    "MCP execution resource or policy changed"
++                }
++            }
++            Log.i(TAG, "Calling tool $toolName on $serverId (${config.commonOptions.name})")
++            try {
++                sdkClient.callTool(
++                    request = CallToolRequest(
++                        params = CallToolRequestParams(name = toolName, arguments = args),
++                    ),
++                    options = RequestOptions(timeout = 120.seconds),
++                )
++            } catch (e: CancellationException) {
++                throw e
++            } catch (e: Exception) {
++                if (oauthCoordinator.needsAuthorization(config, e)) {
++                    statusStore.update(config.id, McpStatus.NeedsAuthorization)
++                }
++                throw e
+             }
+-            throw e
+         }
+     }
+ 
+@@ -322,6 +337,8 @@ internal class McpSessionRegistry(
+                 }
+             )
+         }
++        updatedConfig = settingsStore.settingsFlow.value.mcpServers.singleOrNull { it.id == connectionConfig.id }
++            ?: throw McpClientUnavailableException("MCP server removed during tool discovery")
+         session.config = updatedConfig
+         return updatedConfig
+     }
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/tools/ChatToolFactory.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/tools/ChatToolFactory.kt
+index fee6c194e6bea9cdcaa24de2a734c417f19bb369..37f2cc1947dcef354340ab8bf63473403b50bec1 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/tools/ChatToolFactory.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/tools/ChatToolFactory.kt
+@@ -79,20 +79,25 @@ class ChatToolFactory(
+ 
+             val mcpTools = mcpManager.getAllAvailableTools(assistant)
+             val invalidNames = mcpTools
+-                .map { it.second }
++                .map { it.serverName }
+                 .distinct()
+                 .filter { name -> name.isEmpty() || !name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' } }
+             if (invalidNames.isNotEmpty()) {
+                 throw InvalidMcpServerNamesException(invalidNames)
+             }
+-            mcpTools.forEach { (serverId, serverName, tool) ->
++            mcpTools.forEach { (serverId, serverName, tool, binding) ->
+                 add(
+                     Tool(
+                         name = "mcp__${serverName}__${tool.name}",
+                         description = tool.description ?: "",
+                         parameters = { tool.inputSchema },
+                         needsApproval = { tool.needsApproval },
+-                        execute = { mcpManager.callTool(serverId, tool.name, it.jsonObject) },
++                        executionVersion = binding,
++                        validateExecution = {
++                            if (mcpManager.toolExecutionVersion(serverId, tool.name) == binding) null
++                            else "MCP execution resource or policy changed"
++                        },
++                        execute = { mcpManager.callTool(serverId, tool.name, it.jsonObject, binding) },
+                     )
+                 )
+             }
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/tools/WorkspaceTools.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/tools/WorkspaceTools.kt
+index d7e25f028e7e0e82e0ad016eb25cb902bc7d1a8c..97d733771cb5ee3ef291658889fd44578765f742 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/tools/WorkspaceTools.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/tools/WorkspaceTools.kt
+@@ -1,5 +1,8 @@
+ package me.rerere.rikkahub.data.ai.tools
+ 
++import kotlinx.coroutines.withContext
++import me.rerere.rikkahub.plugins.WorkspaceExecutionBinding
++import me.rerere.rikkahub.plugins.toolExecutionVersion
+ import kotlinx.serialization.json.JsonObjectBuilder
+ import kotlinx.serialization.json.buildJsonObject
+ import kotlinx.serialization.json.contentOrNull
+@@ -70,6 +73,16 @@ suspend fun createWorkspaceTools(
+             add(createShellOutputTool(background))
+             add(createShellKillTool(background))
+         }
++    }.map { tool ->
++        val binding = workspace.toolExecutionVersion()
++        tool.copy(
++            executionVersion = "$binding/${cwd.orEmpty()}",
++            validateExecution = {
++                if (workspaceRepository.getById(workspaceId)?.toolExecutionVersion() == binding) null
++                else "Workspace execution resource or policy changed"
++            },
++            execute = { args -> withContext(WorkspaceExecutionBinding(binding)) { tool.execute(args) } },
++        )
+     }
+ }
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt b/app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt
+index d61d4f3749d0f7711ed21666294052c2d36f95a6..c65215e5b7597d9974b9fbe96648f38164d9da4c 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt
+@@ -41,6 +41,7 @@ import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV3Migration
+ import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV4Migration
+ import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV5Migration
+ import me.rerere.rikkahub.data.model.Assistant
++import me.rerere.rikkahub.plugins.bindMcpExecutionVersions
+ import java.io.File
+ import kotlin.time.Duration.Companion.milliseconds
+ import kotlin.uuid.Uuid
+@@ -266,7 +267,7 @@ class SettingsStore internal constructor(
+                 return
+             }
+             // 规整会重建提供商、助手等对象，而界面按引用判断它们有没有变：规整没改动任何东西时保留传入的实例
+-            val normalized = updated.normalized()
++            val normalized = updated.normalized().bindMcpExecutionVersions(state.value)
+             state.value = if (normalized == updated) updated else normalized
+         }
+         persist()
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/model/ConversationFork.kt b/app/src/main/java/me/rerere/rikkahub/data/model/ConversationFork.kt
+index 08b92399f26cfbd88cb1b90a24e0c8cad3885450..d69eaf8c9b08503886197583d83f2f25b8a424ef 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/model/ConversationFork.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/model/ConversationFork.kt
+@@ -1,5 +1,7 @@
+ package me.rerere.rikkahub.data.model
+ 
++import me.rerere.ai.ui.UIMessagePart
++import me.rerere.rikkahub.plugins.asHistoricalTool
+ import me.rerere.rikkahub.plugins.inheritPluginHistory
+ import kotlin.uuid.Uuid
+ 
+@@ -37,7 +39,10 @@ internal fun Conversation.fork(
+             node.copy(
+                 id = Uuid.random(),
+                 messages = node.messages.map { message ->
+-                    message.copy(parts = message.parts.map { it.mapLocalFileUrls(copyFile) })
++                    message.copy(parts = message.parts.map { part ->
++                        val historical = if (part is UIMessagePart.Tool) part.asHistoricalTool() else part
++                        historical.mapLocalFileUrls(copyFile)
++                    })
+                 },
+             )
+         },
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/model/ConversationMessages.kt b/app/src/main/java/me/rerere/rikkahub/data/model/ConversationMessages.kt
+index 3bb6597ec6545d1ea4d815432743468252830c40..d1d5b3d5cbf85f1ac6c1a1956827e9ad12008af0 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/model/ConversationMessages.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/model/ConversationMessages.kt
+@@ -4,6 +4,7 @@ import me.rerere.ai.ui.ToolApprovalState
+ import me.rerere.ai.ui.UIMessage
+ import me.rerere.ai.ui.UIMessagePart
+ import me.rerere.ai.ui.finishPendingTools
++import me.rerere.rikkahub.plugins.withBoundToolApproval
+ import kotlin.time.Clock
+ import kotlin.uuid.Uuid
+ 
+@@ -64,29 +65,9 @@ internal fun Conversation.withNodeFavorite(nodeId: Uuid, favorite: Boolean): Con
+     }
+ )
+ 
+-/**
+- * 记录用户对工具调用的审批结果。
+- * 当前分支里没有这个还在等待审批的工具调用时返回 null，用来忽略重复点击和对已完成或非当前分支工具的过期审批。
+- */
+-internal fun Conversation.withToolApproval(toolCallId: String, approvalState: ToolApprovalState): Conversation? {
+-    val target = currentMessages.singleOrNull { message ->
+-        message.getTools().any { it.toolCallId == toolCallId && it.isPending }
+-    } ?: return null
+-    return copy(
+-        messageNodes = messageNodes.map { node ->
+-            node.copy(messages = node.messages.map { message ->
+-                message.copy(parts = message.parts.map { part ->
+-                    if (message.id == target.id && part is UIMessagePart.Tool &&
+-                        part.toolCallId == toolCallId && part.isPending) {
+-                        part.copy(approvalState = approvalState)
+-                    } else {
+-                        part
+-                    }
+-                })
+-            })
+-        }
+-    )
+-}
++/** Apply only a host-issued request ID bound to an active run and its original message. */
++internal fun Conversation.withToolApproval(approvalId: String, approvalState: ToolApprovalState): Conversation? =
++    withBoundToolApproval(approvalId, approvalState)
+ 
+ /**
+  * 生成被停止时，最后一条消息里还没执行的工具补上取消的结果，否则这条消息之后没法继续发给模型。
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/repository/WorkspaceRepository.kt b/app/src/main/java/me/rerere/rikkahub/data/repository/WorkspaceRepository.kt
+index 0e79e8991a8fe676223a759f4a64c27712cacb3b..805199eea99336b5fb33dbbd8667022efd3366ba 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/repository/WorkspaceRepository.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/repository/WorkspaceRepository.kt
+@@ -418,13 +418,15 @@ class WorkspaceRepository(
+         return backend.openShell(columns, rows)
+     }
+ 
+-    private fun backendOf(workspace: WorkspaceEntity): WorkspaceBackend =
+-        if (workspace.isSsh()) {
++    private fun backendOf(workspace: WorkspaceEntity): WorkspaceBackend {
++        me.rerere.rikkahub.plugins.WorkspaceExecutionBinding.requireResource(workspace)
++        return if (workspace.isSsh()) {
+             val settings = workspace.sshSettings() ?: error("SSH workspace config is missing: ${workspace.id}")
+             SshWorkspaceBackend(sshPool, workspace.id, settings.toConnectionConfig())
+         } else {
+             manager.backend(workspace.root, workspace.shellCompatibilityMode, workspace.extraBindMounts())
+         }
++    }
+ 
+     private fun SshWorkspaceSettings.toConnectionConfig() = SshConnectionConfig(
+         host = host,
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 26249905770cc4a964e268e94bcfe12859c0a308..732c7f452ebd67b22f9f847213b4990b2a630bf4 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -661,7 +661,7 @@ class ChatService(
+ 
+     fun handleToolApproval(
+         conversationId: Uuid,
+-        toolCallId: String,
++        approvalId: String,
+         approved: Boolean,
+         reason: String = "",
+         answer: String? = null,
+@@ -671,7 +671,7 @@ class ChatService(
+             val previousJob = session.getJob()
+ 
+             val hasOtherPendingTools = session.state.value.currentMessages.any { message ->
+-                message.getTools().any { it.isPending && it.toolCallId != toolCallId }
++                message.getTools().any { it.isPending && it.approvalId != approvalId }
+             }
+ 
+             val job = launchGenerationJob(
+@@ -687,12 +687,11 @@ class ChatService(
+                             else -> ToolApprovalState.Denied(reason)
+                         }
+ 
+-                        val updated = session.tryUpdate { it.withToolApproval(toolCallId, newApprovalState) }
+-                            ?: return@afterPreviousGeneration
+-                        session.flush()
+-
+-                        // Only continue generation when all pending tools are handled
+-                        if (!updated.isAwaitingToolApproval) {
++                        if (!session.respondToToolApproval(approvalId, newApprovalState)) return@afterPreviousGeneration
++                        val active = session.state.value.executionLedger().runs.values.singleOrNull {
++                            it.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE
++                        }
++                        if (active != null && active.state.gates.isEmpty()) {
+                             runTurn(session)
+                         }
+ 
+@@ -739,11 +738,11 @@ class ChatService(
+                 it.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE
+             }
+             val runConversation = activeRun?.let { conversation.forInputPath(it.inputIds) } ?: conversation
+-            var target = replyTargetOf(runConversation, regenerateNodeId)
++            val initialTarget = replyTargetOf(runConversation, regenerateNodeId)
+             // 接着上一条助手消息写时就是它，否则等第一次输出。要在 createContext 之前换掉，
+             // 它会挂起也可能失败，期间或失败后不能还指着上一轮的回复
+-            session.replyMessageId.value = target.continuedMessageId
+-            // 中途压缩把检查点插在回复之后；重新生成较早的消息时后面还有别的节点，不压缩
++            session.replyMessageId.value = initialTarget.continuedMessageId
++            // 重新生成较早的消息时后面还有别的节点，不压缩。
+             val canCompress = regenerateNodeId == null || conversation.messageNodes.lastOrNull()?.id == regenerateNodeId
+ 
+             val turn = requestFactory.createContext(settings, conversation)
+@@ -756,24 +755,26 @@ class ChatService(
+ 
+             var finishReason: AgentFinishReason? = null
+             var afterOperation = false
+-            val run = SessionAgentRun.open(session, target.history) { boundary, ref ->
++            val run = SessionAgentRun.open(session, initialTarget.history, initialTarget.nodeId) { boundary, ref ->
+                 builtinContext.boundaryDecision(
+                     session, ref, boundary, settingsStore.settingsFlow.value, turn.model, canCompress, afterOperation
+                 )
+             }
+             try {
+                 while (true) {
+-                    val replyNodeId = session.state.value.executionLedger().runs.getValue(run.ref.runId).replyNodeId
+-                        ?.let(Uuid::parse) ?: target.nodeId
++                    val plan = run.resumePlan()
++                    val replyNodeId = plan.replyNodeId
++                    session.replyMessageId.value = plan.history.lastOrNull()
++                        ?.takeIf { it.role == MessageRole.ASSISTANT }?.id
+                     val (request, hooks) = requestFactory.createAgent(
+                         turn = turn,
+-                        messages = target.history,
++                        messages = plan.history,
+                         processingStatus = session.processingStatus,
+                         takePendingParts = session.inbox::takeNotices,
+                     )
+                     finishReason = null
+                     withContext(Dispatchers.IO) {
+-                        runAgent(run.bind(request, replyNodeId), run.hooks(hooks)).collect { event ->
++                        runAgent(run.bind(request, plan), run.hooks(hooks)).collect { event ->
+                             run.accept(event)
+                             when (event) {
+                                 is AgentEvent.MessageUpdated -> {
+@@ -820,10 +821,6 @@ class ChatService(
+                     afterOperation = outcome is OperationDispatch.Settled
+                     if (!operationDispatcher.mayResumeAfter(operation, outcome)) break
+                     run.operationFinished()
+-                    target = replyTargetOf(session.state.value.forInputPath(
+-                        session.state.value.executionLedger().runs.getValue(run.ref.runId).inputIds
+-                    ), regenerateNodeId = null)
+-                    session.replyMessageId.value = target.continuedMessageId
+                 }
+             } catch (error: Throwable) {
+                 withContext(NonCancellable) { run.cancel() }
+@@ -1062,6 +1059,7 @@ class ChatService(
+                 when (val outcome = operationDispatcher.dispatch(session, call)) {
+                     is OperationDispatch.Settled -> deliver(Result.success(Unit))
+                     is OperationDispatch.Rejected -> deliver(Result.failure(outcome.error))
++                    OperationDispatch.Waiting -> deliver(Result.failure(MessageQueuePausedException()))
+                     is OperationDispatch.NeedsReconciliation -> {
+                         session.inbox.pause()
+                         deliver(Result.failure(outcome.error))
+@@ -1089,7 +1087,7 @@ class ChatService(
+         return try {
+             val outcome = operationDispatcher.dispatch(session, call)
+             when (outcome) {
+-                is OperationDispatch.Settled -> Unit
++                is OperationDispatch.Settled, OperationDispatch.Waiting -> Unit
+                 is OperationDispatch.Rejected -> addError(outcome.error, session.id)
+                 is OperationDispatch.NeedsReconciliation -> addError(outcome.error, session.id)
+                 is OperationDispatch.StorageBlocked -> addError(outcome.error, session.id)
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/components/message/ChatMessageTools.kt b/app/src/main/java/me/rerere/rikkahub/ui/components/message/ChatMessageTools.kt
+index 7247907a69a70c021de1ed808ba2ba95c382ca8b..8cccb9723a1ff205490d8b1940ed42d52ae1dc49 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/components/message/ChatMessageTools.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/components/message/ChatMessageTools.kt
+@@ -206,7 +206,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
+                 overflow = TextOverflow.Ellipsis,
+             )
+         },
+-        extra = if (isPending && onToolApproval != null) {
++        extra = if (isPending && tool.approvalId != null && onToolApproval != null) {
+             {
+                 Row(
+                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+@@ -222,7 +222,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
+                         )
+                     }
+                     FilledTonalIconButton(
+-                        onClick = { onToolApproval(tool.toolCallId, true, "") },
++                        onClick = { tool.approvalId?.let { onToolApproval(it, true, "") } },
+                         modifier = Modifier.size(28.dp),
+                     ) {
+                         Icon(
+@@ -287,7 +287,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
+             onDismiss = { showDenyDialog = false },
+             onConfirm = { reason ->
+                 showDenyDialog = false
+-                onToolApproval(tool.toolCallId, false, reason)
++                tool.approvalId?.let { onToolApproval(it, false, reason) }
+             }
+         )
+     }
+@@ -342,7 +342,7 @@ private fun ChainOfThoughtScope.AskUserToolStep(
+     loading: Boolean,
+     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)?,
+ ) {
+-    val isPending = tool.isPending
++    val isPending = tool.isPending && tool.approvalId != null
+     val isAnswered = tool.approvalState is ToolApprovalState.Answered
+     val arguments = tool.inputAsJson()
+ 
+@@ -492,7 +492,7 @@ private fun ChainOfThoughtScope.AskUserToolStep(
+                                     }
+                                 })
+                             }
+-                            onToolAnswer(tool.toolCallId, answerPayload.toString())
++                            tool.approvalId?.let { onToolAnswer(it, answerPayload.toString()) }
+                         },
+                         enabled = questions.all { q ->
+                             when (q.selectionType) {
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/floating/ChatFloatingContent.kt b/app/src/main/java/me/rerere/rikkahub/ui/floating/ChatFloatingContent.kt
+index 1e637aeead31dffc7091d80ea9d43609fa142d24..22fcf0a1424d035a58fc2ef173b6d5e96b400a01 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/floating/ChatFloatingContent.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/floating/ChatFloatingContent.kt
+@@ -238,7 +238,7 @@ fun ChatFloatingPanel(
+                         state.pendingTools.forEach { tool ->
+                             PendingToolCard(
+                                 tool = tool,
+-                                onApproval = { approved -> onToolApproval(tool.toolCallId, approved) },
++                                onApproval = { approved -> tool.approvalId?.let { onToolApproval(it, approved) } },
+                                 onOpenConversation = onOpenConversation,
+                             )
+                         }
+diff --git a/app/src/main/java/me/rerere/rikkahub/web/dto/WebDto.kt b/app/src/main/java/me/rerere/rikkahub/web/dto/WebDto.kt
+index 35d0cea2025a2466678866e2777f0462e175c1e3..ffc0390c086f804fcde40b289028ccf140bac596 100644
+--- a/app/src/main/java/me/rerere/rikkahub/web/dto/WebDto.kt
++++ b/app/src/main/java/me/rerere/rikkahub/web/dto/WebDto.kt
+@@ -27,7 +27,7 @@ data class RegenerateRequest(
+ 
+ @Serializable
+ data class ToolApprovalRequest(
+-    val toolCallId: String,
++    val approvalId: String,
+     val approved: Boolean,
+     val reason: String = "",
+     val answer: String? = null,
+@@ -346,7 +346,7 @@ fun Conversation.toDto(isGenerating: Boolean = false) = ConversationDto(
+     id = id.toString(),
+     assistantId = assistantId.toString(),
+     title = title,
+-    messages = messageNodes.map { it.toDto() },
++    messages = visibleMessageNodes.map { it.toDto() },
+     chatSuggestions = chatSuggestions,
+     isPinned = isPinned,
+     customSystemPrompt = customSystemPrompt,
+diff --git a/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt b/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+index 183820f3264fe33ad24996f3c6651bef0e4b0693..0bd7adafb570f792bd267b35321d46b52c9de02b 100644
+--- a/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
++++ b/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+@@ -374,7 +374,7 @@ fun Route.conversationRoutes(
+         post("/{id}/tool-approval") {
+             val uuid = call.parameters["id"].toUuid("conversation id")
+             val request = call.receive<ToolApprovalRequest>()
+-            chatService.handleToolApproval(uuid, request.toolCallId, request.approved, request.reason, request.answer)
++            chatService.handleToolApproval(uuid, request.approvalId, request.approved, request.reason, request.answer)
+             call.respond(HttpStatusCode.Accepted, mapOf("status" to "accepted"))
+         }
+ 
+diff --git a/app/src/test/java/me/rerere/rikkahub/data/model/ConversationMessagesTest.kt b/app/src/test/java/me/rerere/rikkahub/data/model/ConversationMessagesTest.kt
+index d325f66db3dfd9a0b63d802fcbda6198bbedd081..7f0e112dde86689377513a98921c4549f0ea5fac 100644
+--- a/app/src/test/java/me/rerere/rikkahub/data/model/ConversationMessagesTest.kt
++++ b/app/src/test/java/me/rerere/rikkahub/data/model/ConversationMessagesTest.kt
+@@ -81,14 +81,13 @@ class ConversationMessagesTest {
+     }
+ 
+     @Test
+-    fun `approval is recorded on the pending tool`() {
++    fun `unbound legacy approval cannot grant execution rights`() {
+         val reply = toolReply(ToolApprovalState.Pending)
+         val toolCallId = reply.getTools().single().toolCallId
+         val conversation = conversationOf(reply.toMessageNode())
+ 
+-        val updated = conversation.withToolApproval(toolCallId, ToolApprovalState.Approved)!!
+-
+-        assertEquals(ToolApprovalState.Approved, updated.currentMessages.single().getTools().single().approvalState)
++        assertNull(conversation.withToolApproval(toolCallId, ToolApprovalState.Approved))
++        assertEquals(ToolApprovalState.Pending, conversation.currentMessages.single().getTools().single().approvalState)
+     }
+ 
+     @Test
+diff --git a/web-ui/app/components/message/parts/tool-part.tsx b/web-ui/app/components/message/parts/tool-part.tsx
+index 2a264985ffe930d1fd6856c81a7fb812200ccc81..ac8e25373910c55be86270e64e413b68f5804331 100644
+--- a/web-ui/app/components/message/parts/tool-part.tsx
++++ b/web-ui/app/components/message/parts/tool-part.tsx
+@@ -316,11 +316,11 @@ function AskUserToolStep({
+   const allAnswered = questions.length > 0 && questions.every((q) => getAnswer(q).trim());
+ 
+   const handleSubmit = () => {
+-    if (!onToolApproval || !allAnswered) return;
++    if (!onToolApproval || !tool.approvalId || !allAnswered) return;
+     const payload = JSON.stringify({
+       answers: Object.fromEntries(questions.map((q) => [q.id, getAnswer(q)])),
+     });
+-    void onToolApproval(tool.toolCallId, true, "", payload);
++    void onToolApproval(tool.approvalId, true, "", payload);
+   };
+ 
+   const setAnswer = (questionId: string, value: string) => {
+@@ -500,16 +500,16 @@ export function ToolPart({
+ 
+   const handleApprove = async (event: React.MouseEvent<HTMLButtonElement>) => {
+     event.stopPropagation();
+-    if (!onToolApproval) return;
+-    await onToolApproval(tool.toolCallId, true, "");
++    if (!onToolApproval || !tool.approvalId) return;
++    await onToolApproval(tool.approvalId, true, "");
+   };
+ 
+   const handleDeny = async (event: React.MouseEvent<HTMLButtonElement>) => {
+     event.stopPropagation();
+-    if (!onToolApproval) return;
++    if (!onToolApproval || !tool.approvalId) return;
+     const reason = window.prompt(t("tool_part.deny_reason_prompt"), "");
+     if (reason === null) return;
+-    await onToolApproval(tool.toolCallId, false, reason);
++    await onToolApproval(tool.approvalId, false, reason);
+   };
+ 
+   return (
+diff --git a/web-ui/app/routes/conversations.tsx b/web-ui/app/routes/conversations.tsx
+index 82ab1228c7ccd14b526a77cd0a47fc0866460fbb..382093c96a903ebe4e9709b5ad52554d8fb2b528 100644
+--- a/web-ui/app/routes/conversations.tsx
++++ b/web-ui/app/routes/conversations.tsx
+@@ -814,10 +814,10 @@ function ConversationsPageInner() {
+   );
+ 
+   const handleToolApproval = React.useCallback(
+-    async (toolCallId: string, approved: boolean, reason: string, answer?: string) => {
++    async (approvalId: string, approved: boolean, reason: string, answer?: string) => {
+       if (!activeId) return;
+       await api.post<{ status: string }>(`conversations/${activeId}/tool-approval`, {
+-        toolCallId,
++        approvalId,
+         approved,
+         reason,
+         ...(answer != null ? { answer } : {}),
+diff --git a/web-ui/app/types/parts.ts b/web-ui/app/types/parts.ts
+index 0c103e56ce181662abdca64761404dd177a81113..a1ffed6a282d25c23e7c0b597bbe43698afbe013 100644
+--- a/web-ui/app/types/parts.ts
++++ b/web-ui/app/types/parts.ts
+@@ -54,6 +54,7 @@ export interface ToolPart extends BaseMessagePart {
+   input: string;
+   output: UIMessagePart[];
+   approvalState: ToolApprovalState;
++  approvalId?: string | null;
+ }
+ 
+ export interface NoticePart extends BaseMessagePart {
