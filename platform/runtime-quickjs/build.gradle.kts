@@ -5,8 +5,8 @@ plugins {
 android {
     namespace = "dev.rikkahub.plugins.runtime"
     sourceSets {
-        getByName("test").java.srcDir("src/contractTest/kotlin")
-        getByName("androidTest").java.srcDir("src/contractTest/kotlin")
+        getByName("test").kotlin.directories.add("src/contractTest/kotlin")
+        getByName("androidTest").kotlin.directories.add("src/contractTest/kotlin")
     }
 }
 
