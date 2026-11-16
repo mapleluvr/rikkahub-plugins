@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "status": "development",
+  "upstream": {
+    "url": "https://github.com/rikkahub/rikkahub.git",
+    "commit": "bfac2440c8b4dfad97be0a20e4b3e6709fdd6d88"
+  },
+  "series": "patches/rikka-bfac2440/series.json",
+  "toolchain": "profiles/rikka-bfac2440/toolchain.json",
+  "sourceMap": "profiles/rikka-bfac2440/source-map.json"
+}

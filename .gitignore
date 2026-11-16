@@ -1,0 +1,14 @@
+.work/
+.cache/
+out/
+node_modules/
+**/build/
+.gradle/
+.idea/
+*.iml
+**/local.properties
+**/google-services.json
+*.keystore
+*.jks
+*.key
+docs/.temp/

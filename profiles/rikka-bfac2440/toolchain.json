@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "node": "24.15.0",
+  "pnpm": "11.28.11",
+  "java": "21.0.3",
+  "gradle": "9.6.0",
+  "agp": "9.4.0",
+  "kotlin": "2.4.21",
+  "compileSdk": "37.2",
+  "minSdk": 26,
+  "quickjs": "1.0.15",
+  "unresolved": [
+    "Gradle distribution checksum",
+    "Resolved Maven dependency checksums",
+    "Android SDK revisions"
+  ]
+}
