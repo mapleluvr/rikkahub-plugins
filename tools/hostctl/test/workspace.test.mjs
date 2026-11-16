@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -90,6 +90,41 @@ for (const target of ['../escape', 'C:/outside', 'vendor/../entry.txt', '.git/co
     await assert.rejects(prepare(f.options), /path|collision|reserved|vendor/i);
   });
 }
+
+for (const tracked of [true, false]) {
+  test(`export preserves ${tracked ? 'tracked' : 'ignored'} non-series files by refusing the swap`, async t => {
+    const f = await fixture(t);
+    if (!tracked) await f.put('.gitignore', 'patches/test/notes.txt\n');
+    await f.put('patches/test/notes.txt', 'irreplaceable local notes\n');
+    f.commit();
+    await prepare(f.options);
+    const before = await readdir(join(f.repo, 'patches/test'));
+    const manifest = await readFile(join(f.repo, 'patches/test/series.json'));
+    await assert.rejects(exportSeries({ repo: f.repo, workspace: f.options.out }), /unmanaged/i);
+    assert.deepEqual(await readdir(join(f.repo, 'patches/test')), before);
+    assert.deepEqual(await readFile(join(f.repo, 'patches/test/series.json')), manifest);
+    assert.equal(await readFile(join(f.repo, 'patches/test/notes.txt'), 'utf8'), 'irreplaceable local notes\n');
+  });
+}
+
+for (const committed of [true, false]) {
+  test(`verify-replay rejects ${committed ? 'committed' : 'uncommitted'} expected tree drift`, async t => {
+    const f = await fixture(t);
+    await prepare(f.options);
+    await writeFile(join(f.options.out, 'entry.txt'), 'not exported\n');
+    if (committed) {
+      git(f.options.out, 'add', '.');
+      git(f.options.out, 'commit', '-m', 'pending host change');
+    }
+    await assert.rejects(verifyReplay({ ...f.options, out: join(f.root, 'replay'), expected: f.options.out }), /drift|clean/i);
+  });
+}
+
+test('verify-replay refuses a different requested profile before assembly', async t => {
+  const f = await fixture(t);
+  await prepare(f.options);
+  await assert.rejects(verifyReplay({ ...f.options, profile: 'different', out: join(f.root, 'replay'), expected: f.options.out }), /profile/i);
+});
 
 test('rejects changes to imported platform files during patch export', async t => {
   const f = await fixture(t);

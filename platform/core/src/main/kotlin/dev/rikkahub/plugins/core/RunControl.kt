@@ -17,7 +17,8 @@ object RunControl {
         } else {
             state.copy(
                 gates = state.gates + (gate.id to gate),
-                revision = state.revision + 1
+                revision = state.revision + 1,
+                frameRevision = state.frameRevision + 1
             )
         }
     }
@@ -26,21 +27,21 @@ object RunControl {
         if (id !in state.gates || state.status != RunStatus.ACTIVE) {
             state
         } else {
-            state.copy(gates = state.gates - id, revision = state.revision + 1)
+            state.copy(gates = state.gates - id, revision = state.revision + 1, frameRevision = state.frameRevision + 1)
         }
 
     fun cancel(state: RunState): RunState =
         if (state.status != RunStatus.ACTIVE) {
             state
         } else {
-            state.copy(status = RunStatus.CANCELLED, revision = state.revision + 1)
+            state.copy(status = RunStatus.CANCELLED, revision = state.revision + 1, frameRevision = state.frameRevision + 1)
         }
 
-    fun admit(state: RunState, step: Int, preparedRevision: Long): Admission {
+    fun admit(state: RunState, step: Int, preparedFrameRevision: Long): Admission {
         val reason = when {
             state.status != RunStatus.ACTIVE -> "Run is terminal"
             state.gates.isNotEmpty() -> "Run has unresolved gates"
-            preparedRevision != state.revision -> "Prepared request is stale"
+            preparedFrameRevision != state.frameRevision -> "Prepared request is stale"
             step < 0 || step < state.stepsUsed - 1 || step > state.stepsUsed -> "Invalid step cursor"
             step == state.stepsUsed && state.stepsUsed >= state.maxSteps -> "Model step budget exhausted"
             state.attemptsUsed >= state.maxAttempts -> "Request attempt budget exhausted"

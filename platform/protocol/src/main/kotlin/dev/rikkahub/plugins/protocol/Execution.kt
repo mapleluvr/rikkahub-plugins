@@ -31,12 +31,14 @@ data class RunState(
     val status: RunStatus = RunStatus.ACTIVE,
     val gates: Map<String, Gate> = emptyMap(),
     val stepsUsed: Int = 0,
-    val attemptsUsed: Int = 0
+    val attemptsUsed: Int = 0,
+    /** Invalidates prepared input; bookkeeping alone never advances this version. */
+    val frameRevision: Long = 0
 ) {
     init {
         require(maxSteps > 0 && maxAttempts > 0)
         require(stepsUsed in 0..maxSteps && attemptsUsed in stepsUsed..maxAttempts)
-        require(revision >= 0)
+        require(revision >= 0 && frameRevision in 0..revision)
         require(gates.all { (key, value) -> key == value.id && key.isNotBlank() })
     }
 }

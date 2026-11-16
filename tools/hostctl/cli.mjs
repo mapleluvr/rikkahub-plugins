@@ -2,7 +2,7 @@
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { doctor } from './doctor.mjs';
 import { loadInputs } from './inputs.mjs';
 import { prepare, verifyReplay, exportSeries } from './workspace.mjs';
 
@@ -22,16 +22,10 @@ try {
   switch (command) {
     case 'doctor': {
       const inputs = loadInputs(repo, options.profile);
-      const checks = {};
-      for (const [name, executable, args] of [
-        ['git', 'git', ['--version']], ['java', 'java', ['-version']],
-      ]) {
-        try {
-          checks[name] = { available: true, output: execFileSync(executable, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() };
-        } catch (error) { checks[name] = { available: false, error: error.message }; }
-      }
-      result = { profile: options.profile, node: process.versions.node, checks, expected: inputs.toolchain };
-      if (Object.values(checks).some(check => !check.available)) process.exitCode = 1;
+      const checks = doctor(inputs.toolchain);
+      result = { profile: options.profile, checks, expected: inputs.toolchain };
+      if (['node', 'java', 'git'].some(key =>
+        ['unavailable', 'mismatch'].includes(checks[key].compliance))) process.exitCode = 1;
       break;
     }
     case 'prepare': result = await prepare(options); break;

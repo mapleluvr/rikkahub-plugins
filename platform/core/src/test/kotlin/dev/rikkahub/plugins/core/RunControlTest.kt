@@ -18,33 +18,49 @@ class RunControlTest {
     fun independentGatesMustAllBeResolvedBeforeAdmission() {
         var state = RunControl.addGate(initial, Gate("pause", GateKind.USER_PAUSE))
         state = RunControl.addGate(state, Gate("approval", GateKind.TOOL_APPROVAL))
-        assertFalse(RunControl.admit(state, 0, state.revision).allowed)
+        assertFalse(RunControl.admit(state, 0, state.frameRevision).allowed)
         state = RunControl.resolveGate(state, "pause")
-        assertFalse(RunControl.admit(state, 0, state.revision).allowed)
+        assertFalse(RunControl.admit(state, 0, state.frameRevision).allowed)
         state = RunControl.resolveGate(state, "approval")
-        assertTrue(RunControl.admit(state, 0, state.revision).allowed)
+        assertTrue(RunControl.admit(state, 0, state.frameRevision).allowed)
+    }
+
+    @Test
+    fun frozenRequestSurvivesRetryBookkeepingButNotAnInterveningPauseAndResume() {
+        val preparedAt = initial.frameRevision
+        val first = RunControl.admit(initial, 0, preparedAt)
+        assertTrue(first.allowed)
+        val retry = RunControl.admit(first.state, 0, preparedAt)
+        assertTrue(retry.allowed)
+        assertEquals(1, retry.state.stepsUsed)
+        assertEquals(2, retry.state.attemptsUsed)
+        assertEquals(2, retry.state.revision)
+        assertEquals(preparedAt, retry.state.frameRevision)
+        val paused = RunControl.addGate(retry.state, Gate("pause", GateKind.USER_PAUSE))
+        val resumed = RunControl.resolveGate(paused, "pause")
+        assertFalse(RunControl.admit(resumed, 0, preparedAt).allowed)
     }
 
     @Test
     fun budgetsPersistAcrossSegmentsAndRetriesHaveTheirOwnLimit() {
-        var state = RunControl.admit(initial, 0, initial.revision).state
-        state = RunControl.admit(state, 0, state.revision).state
+        var state = RunControl.admit(initial, 0, initial.frameRevision).state
+        state = RunControl.admit(state, 0, state.frameRevision).state
         assertEquals(1, state.stepsUsed)
         assertEquals(2, state.attemptsUsed)
-        state = RunControl.admit(state, 1, state.revision).state
+        state = RunControl.admit(state, 1, state.frameRevision).state
         val reconstructed = state.copy()
-        assertFalse(RunControl.admit(reconstructed, 1, reconstructed.revision).allowed)
-        assertFalse(RunControl.admit(reconstructed, 2, reconstructed.revision).allowed)
+        assertFalse(RunControl.admit(reconstructed, 1, reconstructed.frameRevision).allowed)
+        assertFalse(RunControl.admit(reconstructed, 2, reconstructed.frameRevision).allowed)
     }
 
     @Test
     fun preparationRevisionAndTerminalStateAreRechecked() {
-        val preparedAt = initial.revision
+        val preparedAt = initial.frameRevision
         var state = RunControl.addGate(initial, Gate("pause", GateKind.USER_PAUSE))
         state = RunControl.resolveGate(state, "pause")
         assertFalse(RunControl.admit(state, 0, preparedAt).allowed)
         state = RunControl.cancel(state)
-        assertFalse(RunControl.admit(state, 0, state.revision).allowed)
+        assertFalse(RunControl.admit(state, 0, state.frameRevision).allowed)
         assertEquals(state, RunControl.resolveGate(state, "missing"))
     }
 

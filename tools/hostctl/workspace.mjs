@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile, lstat, mkdtemp, rm, rename } from 'node:fs/promises';
-import { join, resolve, dirname } from 'node:path';
+import { mkdir, readFile, writeFile, lstat, mkdtemp, rm, rename, readdir } from 'node:fs/promises';
+import { join, resolve, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { git, digest, loadInputs, safePath, cleanCommit } from './inputs.mjs';
 
@@ -70,10 +70,37 @@ export async function prepare({ repo, profile, source, out }) {
 
 export async function verifyReplay({ expected, ...options }) {
   const original = await readWorkspace(expected);
+  if (original.profile !== options.profile) throw new Error('Expected workspace has a different profile');
+  if (git(expected, ['status', '--porcelain', '--untracked-files=all'])) throw new Error('Expected workspace must be clean');
+  if (git(expected, ['rev-parse', 'HEAD']) !== original.adapterTip ||
+      git(expected, ['rev-parse', 'HEAD^{tree}']) !== original.sourceTree) {
+    throw new Error('Expected workspace has drifted from its assembly lock; export and re-prepare first');
+  }
   if (original.maintenanceCommit !== cleanCommit(options.repo)) throw new Error('Expected workspace has different maintenance inputs');
   const lock = await prepare(options);
   if (lock.sourceTree !== original.sourceTree) throw new Error('Replayed source tree differs');
   return lock;
+}
+
+/** A series directory is exclusively owned; refuse before touching any unrelated local file. */
+async function ownedSeriesDirectory(inputs) {
+  const relative = dirname(inputs.config.series).replaceAll('\\', '/');
+  if (!relative.startsWith('patches/')) throw new Error('Series must own a directory below patches/');
+  const allowed = new Set([basename(inputs.config.series)]);
+  for (const patch of inputs.patches) {
+    if (dirname(patch.file).replaceAll('\\', '/') !== relative) throw new Error('Patch outside its managed series directory');
+    allowed.add(basename(patch.file));
+  }
+  let directory = inputs.repo;
+  for (const part of relative.split('/')) {
+    directory = join(directory, part);
+    const stat = await lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Series directory must not be a link');
+  }
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!allowed.has(entry.name) || !entry.isFile()) throw new Error(`Unmanaged series entry: ${entry.name}`);
+  }
+  return directory;
 }
 
 /** Exports host-only commits, replays in isolation, then swaps the series directory. */
@@ -82,6 +109,7 @@ export async function exportSeries({ repo, workspace }) {
   if (git(workspace, ['status', '--porcelain', '--untracked-files=all'])) throw new Error('Export workspace must be clean');
   const inputs = loadInputs(repo, metadata.profile);
   if (inputs.commit !== metadata.maintenanceCommit) throw new Error('Workspace maintenance commit is stale; re-prepare before exporting');
+  const seriesDir = await ownedSeriesDirectory(inputs);
   git(workspace, ['merge-base', '--is-ancestor', metadata.adapterBase, 'HEAD']);
   const commits = git(workspace, ['rev-list', '--reverse', `${metadata.adapterBase}..HEAD`]).split('\n').filter(Boolean);
   const expectedTree = git(workspace, ['rev-parse', 'HEAD^{tree}']);
@@ -105,19 +133,23 @@ export async function exportSeries({ repo, workspace }) {
     const replay = await assemble({ ...inputs, patches }, { source: workspace, out: join(stage, 'replay') });
     if (replay.sourceTree !== expectedTree) throw new Error('Export replay differs from the edited checkout');
     const manifest = { schemaVersion: 1, patches: patches.map(({ bytes: _bytes, ...patch }) => patch) };
-    const seriesDir = resolve(repo, dirname(inputs.config.series));
-    // Stage on the same filesystem so directory rename remains atomic.
-    const replacement = await mkdtemp(`${seriesDir}.next-`);
-    for (const patch of patches) await writeFile(join(replacement, patch.file.split('/').at(-1)), patch.bytes);
-    await writeFile(join(replacement, 'series.json'), JSON.stringify(manifest, null, 2) + '\n');
+    // Recheck after replay, immediately before publishing the replacement.
+    await ownedSeriesDirectory(inputs);
     const backup = `${seriesDir}.previous`;
     if (await exists(backup)) throw new Error(`Previous export recovery directory exists: ${backup}`);
-    await rename(seriesDir, backup);
-    try { await rename(replacement, seriesDir); } catch (error) {
-      await rename(backup, seriesDir);
-      throw error;
+    const replacement = await mkdtemp(`${seriesDir}.next-`);
+    try {
+      for (const patch of patches) await writeFile(join(replacement, basename(patch.file)), patch.bytes);
+      await writeFile(join(replacement, basename(inputs.config.series)), JSON.stringify(manifest, null, 2) + '\n');
+      await rename(seriesDir, backup);
+      try { await rename(replacement, seriesDir); } catch (error) {
+        await rename(backup, seriesDir);
+        throw error;
+      }
+      await rm(backup, { recursive: true });
+    } finally {
+      await rm(replacement, { recursive: true, force: true });
     }
-    await rm(backup, { recursive: true });
     return { ...manifest, sourceTree: expectedTree };
   } finally {
     await rm(stage, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

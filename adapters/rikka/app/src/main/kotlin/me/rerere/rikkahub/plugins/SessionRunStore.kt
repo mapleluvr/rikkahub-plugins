@@ -36,13 +36,13 @@ class SessionRunStore(private val session: ConversationSession) {
         it.copy(state = RunControl.cancel(it.state))
     }
 
-    suspend fun admit(ref: RunRef, step: Int, preparedRevision: Long): Admission {
+    suspend fun admit(ref: RunRef, step: Int, preparedFrameRevision: Long): Admission {
+        // commitExtension may re-evaluate after settings preparation; return the final evaluation.
         var admission: Admission? = null
         update(ref) {
-            RunControl.admit(it.state, step, preparedRevision).let { result ->
-                admission = result
-                it.copy(state = result.state)
-            }
+            val result = RunControl.admit(it.state, step, preparedFrameRevision)
+            admission = result
+            it.copy(state = result.state)
         }
         return checkNotNull(admission)
     }
@@ -56,16 +56,14 @@ class SessionRunStore(private val session: ConversationSession) {
         updateMessages: (Conversation) -> Conversation = { it }
     ): RunCheckpoint {
         require(boundary.isNotBlank())
-        var savedCheckpoint: RunCheckpoint? = null
-        session.commitExtension(incarnation) { current ->
+        val saved = session.commitExtension(incarnation) { current ->
             val ledger = current.executionLedger()
             val old = requireRun(current, ref)
             require(nextStep in old.nextStep..old.state.stepsUsed) { "Invalid completed-step cursor" }
             val next = old.copy(boundary = boundary, nextStep = nextStep, toolCallId = toolCallId)
-            savedCheckpoint = next
             updateMessages(current).withExecutionLedger(ledger.copy(runs = ledger.runs + (ref.runId to next)))
         }
-        return checkNotNull(savedCheckpoint)
+        return saved.executionLedger().runs.getValue(ref.runId)
     }
 
     suspend fun update(ref: RunRef, transform: (RunCheckpoint) -> RunCheckpoint): RunCheckpoint {

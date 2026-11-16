@@ -41,7 +41,9 @@ object OperationLedger {
         val record = record(ledger, id)
         require(record.call.ref == ref) { "Operation identity or package lease changed" }
         require(record.attemptId == attemptId) { "Stale attempt" }
-        require(sources.associateBy { it.id }.let { current -> record.sources.all { current[it.id] == it } }) {
+        val currentSources = sources.associateBy { it.id }
+        require(currentSources.size == sources.size) { "Duplicate source identity" }
+        require(record.sources.all { currentSources[it.id] == it }) {
             "Operation source was edited or removed"
         }
         if (record.status == AttemptStatus.SETTLED) {

@@ -36,16 +36,16 @@ class SessionRunStoreTest {
         assertEquals(setOf("approval"), remaining.state.gates.keys)
         assertEquals("tool", remaining.toolCallId)
         assertEquals(1, remaining.nextStep)
-        assertFalse(restored.admit(ref, 1, remaining.state.revision).allowed)
+        assertFalse(restored.admit(ref, 1, remaining.state.frameRevision).allowed)
         val ready = restored.resolveGate(ref, "approval")
-        val admitted = restored.admit(ref, 1, ready.state.revision)
+        val admitted = restored.admit(ref, 1, ready.state.frameRevision)
         assertTrue(admitted.allowed)
-        val exhausted = restored.admit(ref, 2, admitted.state.revision)
+        val exhausted = restored.admit(ref, 2, admitted.state.frameRevision)
         assertFalse(exhausted.allowed)
         assertEquals(2, exhausted.state.stepsUsed)
         val cancelled = restored.cancel(ref)
         assertEquals(RunStatus.CANCELLED, cancelled.state.status)
-        assertFalse(restored.admit(ref, 1, cancelled.state.revision).allowed)
+        assertFalse(restored.admit(ref, 1, cancelled.state.frameRevision).allowed)
     }
 
     @Test
