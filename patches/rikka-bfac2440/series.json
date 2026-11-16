@@ -4,12 +4,21 @@
     {
       "id": "optional-firebase",
       "file": "patches/rikka-bfac2440/0001-optional-firebase.patch",
-      "sha256": "698643fb2ab8f64c987c89bfbb342aadfc54e21771246760bda7835adba9c026",
+      "sha256": "61593c0554d11c9af7ea8b8b28a29b16f1e5a426406f6935855f921c7b3f0184",
       "paths": [
         "app/build.gradle.kts",
         "app/src/main/java/me/rerere/rikkahub/di/AppModule.kt",
         "app/src/main/java/me/rerere/rikkahub/di/ViewModelModule.kt",
         "app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt"
+      ]
+    },
+    {
+      "id": "plugin-build",
+      "file": "patches/rikka-bfac2440/0002-plugin-build.patch",
+      "sha256": "da1ac30f3cbd3e76f9203cdd08fd4bffb4f6e4d9d32112406b5c99e9acbe509e",
+      "paths": [
+        ".gitignore",
+        "settings.gradle.kts"
       ]
     }
   ]

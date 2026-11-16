@@ -1,0 +1,43 @@
+From 3cb82f81e99288eb207baca17130d373d2356a2c Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 02:41:47 +0800
+Subject: [PATCH] Import plugin runtime module and isolate dependency
+ repositories
+
+Patch-Id: plugin-build
+---
+ .gitignore          | 3 ++-
+ settings.gradle.kts | 4 +++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/.gitignore b/.gitignore
+index d2e682a1f247cb68e89b664400de31b43b5bf64a..76bac31004b32d641ec46e1442f02dbd4a856e5a 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -10,4 +10,5 @@
+ local.properties
+ .cursor
+ .history
+-.kotlin
+\ No newline at end of file
++.kotlin
++/vendor/**/build/
+diff --git a/settings.gradle.kts b/settings.gradle.kts
+index 65cce7234b57b9665f9852fe31f373a538c3a3b4..eea89a93b9953876e52902d07997e58e0664e841 100644
+--- a/settings.gradle.kts
++++ b/settings.gradle.kts
+@@ -27,7 +27,6 @@ dependencyResolutionManagement {
+         google()
+         mavenCentral()
+         maven("https://jitpack.io")
+-        mavenLocal()
+     }
+ }
+ 
+@@ -46,3 +45,6 @@ include(":terminal")
+ include(":app:baselineprofile")
+ include(":mediagen")
+ include(":oauth")
++
++include(":plugin-runtime-quickjs")
++project(":plugin-runtime-quickjs").projectDir = file("vendor/rikka-plugin-host/platform/runtime-quickjs")
