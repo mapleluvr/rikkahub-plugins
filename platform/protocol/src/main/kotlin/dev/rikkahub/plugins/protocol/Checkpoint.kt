@@ -19,12 +19,22 @@ data class OperationRecord(
 )
 
 @Serializable
-data class RunCheckpoint(val state: RunState, val boundary: String, val nextStep: Int, val toolCallId: String? = null)
+data class ToolCallStamp(val id: String, val name: String, val input: String)
+
+@Serializable
+data class RunCheckpoint(
+    val state: RunState,
+    val boundary: String,
+    val nextStep: Int,
+    val toolCallId: String? = null,
+    val messageId: String? = null,
+    val toolBatch: List<ToolCallStamp> = emptyList()
+)
 
 /** One versioned host envelope. Unknown envelope versions must never execute. */
 @Serializable
 data class ExecutionLedger(
-    val version: Int = 1,
+    val version: Int = 2,
     val runs: Map<String, RunCheckpoint> = emptyMap(),
     val operations: Map<String, OperationRecord> = emptyMap()
 )

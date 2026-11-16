@@ -19,7 +19,7 @@ private const val HOST_LEDGER = "host.execution"
 fun Conversation.executionLedger(): ExecutionLedger {
     val payload = pluginState[HOST_LEDGER] ?: return ExecutionLedger()
     val ledger = JsonInstant.decodeFromJsonElement<ExecutionLedger>(payload)
-    require(ledger.version == 1) { "Unsupported execution ledger; preserved without execution" }
+    require(ledger.version == 2) { "Unsupported execution ledger; preserved without execution" }
     return ledger
 }
 
@@ -45,7 +45,7 @@ fun Conversation.pluginSources(): List<SourceStamp> = messageNodes.flatMap { nod
 class SessionOperationStore(private val session: ConversationSession) {
     private val incarnation = session.incarnation
     suspend fun prepare(call: OperationCall, sources: List<SourceStamp>): OperationRecord {
-        require(call.ref.conversationId == session.id.toString())
+        require(call.target.conversationId == session.id.toString())
         val saved = session.commitExtension(incarnation) {
             require(sources.all { stamp -> stamp in it.pluginSources() }) { "Source is stale" }
             it.withExecutionLedger(OperationLedger.prepare(it.executionLedger(), call, sources))
@@ -70,7 +70,7 @@ class SessionOperationStore(private val session: ConversationSession) {
     ) {
         session.commitExtension(incarnation) { current ->
             val ledger = current.executionLedger()
-            val settled = OperationLedger.settle(ledger, call.id, attemptId, call.ref, current.pluginSources(), result)
+            val settled = OperationLedger.settle(ledger, call.id, attemptId, call, current.pluginSources(), result)
             // Duplicate delivery must not apply message/state changes for a second time.
             if (settled === ledger) {
                 current

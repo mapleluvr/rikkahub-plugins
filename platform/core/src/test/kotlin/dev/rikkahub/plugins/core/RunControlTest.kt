@@ -11,7 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RunControlTest {
-    private val ref = RunRef("conversation", "branch", "run", 1, "package-hash")
+    private val ref = RunRef("conversation", "branch", "run", 1)
     private val initial = RunState(ref, maxSteps = 2, maxAttempts = 3)
 
     @Test

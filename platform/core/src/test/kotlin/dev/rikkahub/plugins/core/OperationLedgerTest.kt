@@ -4,7 +4,8 @@ import dev.rikkahub.plugins.protocol.AttemptStatus
 import dev.rikkahub.plugins.protocol.ExecutionLedger
 import dev.rikkahub.plugins.protocol.OperationCall
 import dev.rikkahub.plugins.protocol.OperationResult
-import dev.rikkahub.plugins.protocol.RunRef
+import dev.rikkahub.plugins.protocol.BranchRef
+import dev.rikkahub.plugins.protocol.PackageLease
 import dev.rikkahub.plugins.protocol.SourceStamp
 import kotlinx.serialization.json.JsonNull
 import org.junit.Assert.assertEquals
@@ -13,8 +14,8 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class OperationLedgerTest {
-    private val ref = RunRef("c", "b", "r", 1, "v1")
-    private val call = OperationCall("command", "test/review", ref, JsonNull)
+    private val lease = PackageLease("test", "v1", 1)
+    private val call = OperationCall("command", "test/review", BranchRef("c", "b"), JsonNull, lease)
     private val sources = listOf(SourceStamp("message", "digest"))
 
     @Test
@@ -26,8 +27,8 @@ class OperationLedgerTest {
         }
         val running = OperationLedger.start(prepared, call.id, "attempt")
         assertThrows(IllegalStateException::class.java) { OperationLedger.start(running, call.id, "duplicate") }
-        val settled = OperationLedger.settle(running, call.id, "attempt", ref, sources, OperationResult())
-        assertSame(settled, OperationLedger.settle(settled, call.id, "attempt", ref, sources, OperationResult()))
+        val settled = OperationLedger.settle(running, call.id, "attempt", call, sources, OperationResult())
+        assertSame(settled, OperationLedger.settle(settled, call.id, "attempt", call, sources, OperationResult()))
     }
 
     @Test
@@ -38,7 +39,7 @@ class OperationLedgerTest {
             assertEquals(AttemptStatus.UNKNOWN, uncertain.operations.getValue(call.id).status)
             assertThrows(IllegalStateException::class.java) { OperationLedger.start(uncertain, call.id, "retry") }
             assertThrows(IllegalStateException::class.java) {
-                OperationLedger.settle(uncertain, call.id, "attempt", ref, sources, OperationResult())
+                OperationLedger.settle(uncertain, call.id, "attempt", call, sources, OperationResult())
             }
         }
         assertEquals(
@@ -58,7 +59,7 @@ class OperationLedgerTest {
             running,
             call.id,
             "attempt",
-            ref,
+            call,
             sources + SourceStamp("tail", "new"),
             OperationResult()
         ).operations.getValue(call.id).status)
@@ -67,7 +68,7 @@ class OperationLedgerTest {
                 running,
                 call.id,
                 "attempt",
-                ref,
+                call,
                 listOf(SourceStamp("message", "edited")),
                 OperationResult()
             )
@@ -77,7 +78,7 @@ class OperationLedgerTest {
                 running,
                 call.id,
                 "attempt",
-                ref.copy(packageHash = "v2"),
+                call.copy(handler = lease.copy(packageHash = "v2")),
                 sources,
                 OperationResult()
             )
@@ -87,7 +88,7 @@ class OperationLedgerTest {
     @Test
     fun unknownLedgerVersionsCannotExecute() {
         assertThrows(IllegalArgumentException::class.java) {
-            OperationLedger.prepare(ExecutionLedger(version = 2), call, sources)
+            OperationLedger.prepare(ExecutionLedger(version = 999), call, sources)
         }
     }
 }

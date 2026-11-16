@@ -6,6 +6,11 @@ import dev.rikkahub.plugins.protocol.OperationCall
 import dev.rikkahub.plugins.protocol.OperationResult
 import dev.rikkahub.plugins.protocol.ProjectionPlan
 import dev.rikkahub.plugins.protocol.RunRef
+import dev.rikkahub.plugins.protocol.RunState
+import dev.rikkahub.plugins.protocol.Gate
+import dev.rikkahub.plugins.protocol.GateKind
+import dev.rikkahub.plugins.protocol.BranchRef
+import dev.rikkahub.plugins.protocol.PackageLease
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -19,24 +24,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OperationRunnerTest {
-    private val ref = RunRef("conversation", "branch", "run", 1, "package")
-    private val call = OperationCall("request", "test/report", ref, JsonPrimitive("input"))
+    private val lease = PackageLease("test", "package", 1)
+    private val call = OperationCall("request", "test/report", BranchRef("conversation", "branch"), JsonPrimitive("input"), lease)
 
     @Test
     fun operationsCanReduceWithoutModelWorkOrPublishReportsWithoutProjection() = runTest {
         val source = listOf(ContextItem("a", "old"), ContextItem("b", "new"))
         val runner = OperationRunner(listOf(
-            OperationDefinition("test/reduce", setOf("context.write")) { _ ->
+            OperationDefinition("test/reduce", lease, setOf("context.write")) { _ ->
                 OperationResult(projection = ProjectionPlan(omit = setOf("a")))
             },
-            OperationDefinition("test/report", emptySet()) { input ->
-                OperationResult(artifacts = listOf(ArtifactDraft("review", input)))
+            OperationDefinition("test/report", lease, emptySet()) { invocation ->
+                OperationResult(artifacts = listOf(ArtifactDraft("review", invocation.call.input)))
             }
         ))
-        val reduced = runner.execute(call.copy(type = "test/reduce"), setOf("context.write")) { }
+        val reduced = runner.execute(call.copy(type = "test/reduce"), setOf("context.write"), "attempt") { }
         assertEquals(listOf(source[1]), ContextProjection.apply(source, reduced.projection!!))
         assertEquals(2, source.size)
-        val report = runner.execute(call, emptySet()) { }
+        val report = runner.execute(call, emptySet(), "attempt") { }
+        assertNull(call.run)
         assertNull(report.projection)
         assertEquals(JsonPrimitive("input"), report.artifacts.single().content)
     }
@@ -46,13 +52,13 @@ class OperationRunnerTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var authorized = true
-        val runner = OperationRunner(listOf(OperationDefinition("test/report", emptySet()) {
+        val runner = OperationRunner(listOf(OperationDefinition("test/report", lease, emptySet()) {
             entered.complete(Unit)
             release.await()
             OperationResult()
         }))
         val work = async {
-            runCatching { runner.execute(call, emptySet()) { check(authorized) } }
+            runCatching { runner.execute(call, emptySet(), "attempt") { check(authorized) } }
         }
         entered.await()
         authorized = false
@@ -64,7 +70,7 @@ class OperationRunnerTest {
     fun cancellationReachesOperationAndPermissionDenialDoesNotInvokeIt() = runTest {
         val entered = CompletableDeferred<Unit>()
         val cancelled = CompletableDeferred<Unit>()
-        val runner = OperationRunner(listOf(OperationDefinition("test/report", setOf("report.write")) {
+        val runner = OperationRunner(listOf(OperationDefinition("test/report", lease, setOf("report.write")) {
             entered.complete(Unit)
             try {
                 CompletableDeferred<Unit>().await()
@@ -73,12 +79,46 @@ class OperationRunnerTest {
             }
             OperationResult()
         }))
-        assertTrue(runCatching { runner.execute(call, emptySet()) { } }.isFailure)
+        assertTrue(runCatching { runner.execute(call, emptySet(), "attempt") { } }.isFailure)
         assertFalse(entered.isCompleted)
-        val work = async { runner.execute(call, setOf("report.write")) { } }
+        val work = async { runner.execute(call, setOf("report.write"), "attempt") { } }
         entered.await()
         work.cancelAndJoin()
         assertTrue(cancelled.isCompleted)
+    }
+
+    @Test
+    fun twoPackagesShareOneRunAndDispatchOnlyToTheirRecordedHandlerLease() = runTest {
+        val other = PackageLease("second", "second-hash", 2)
+        val run = RunRef(call.target.conversationId, call.target.branchId, "shared")
+        var state = RunControl.addGate(RunState(run, 3, 4), Gate("pause", GateKind.USER_PAUSE))
+        val observed = mutableListOf<OperationContext>()
+        val runner = OperationRunner(listOf(lease, other).map { version ->
+            OperationDefinition("test/report", version, emptySet()) { invocation ->
+                observed += invocation
+                OperationResult()
+            }
+        })
+        for (version in listOf(lease, other)) {
+            val invocation = call.copy(handler = version, caller = lease, run = run)
+            assertTrue(runCatching {
+                runner.execute(invocation, emptySet(), "attempt") { check(state.gates.isEmpty()) }
+            }.isFailure)
+        }
+        assertTrue(observed.isEmpty())
+        state = RunControl.resolveGate(state, "pause")
+        for (version in listOf(lease, other)) {
+            runner.execute(call.copy(handler = version, caller = lease, run = run), emptySet(), "attempt") {
+                check(state.gates.isEmpty())
+            }
+        }
+        assertEquals(listOf(lease, other), observed.map { it.call.handler })
+        assertEquals(setOf(run), observed.map { it.call.run }.toSet())
+        assertEquals(setOf("attempt"), observed.map { it.attemptId }.toSet())
+        assertTrue(runCatching {
+            runner.execute(call.copy(handler = lease.copy(packageHash = "missing")), emptySet(), "attempt") {}
+        }.isFailure)
+        assertEquals(2, observed.size)
     }
 
     @Test

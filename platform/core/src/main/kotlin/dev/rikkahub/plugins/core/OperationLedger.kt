@@ -5,7 +5,6 @@ import dev.rikkahub.plugins.protocol.ExecutionLedger
 import dev.rikkahub.plugins.protocol.OperationCall
 import dev.rikkahub.plugins.protocol.OperationRecord
 import dev.rikkahub.plugins.protocol.OperationResult
-import dev.rikkahub.plugins.protocol.RunRef
 import dev.rikkahub.plugins.protocol.SourceStamp
 
 /** Pure receipt transitions. Persist each returned ledger before starting the next effect. */
@@ -34,12 +33,12 @@ object OperationLedger {
         ledger: ExecutionLedger,
         id: String,
         attemptId: String,
-        ref: RunRef,
+        call: OperationCall,
         sources: List<SourceStamp>,
         result: OperationResult
     ): ExecutionLedger {
         val record = record(ledger, id)
-        require(record.call.ref == ref) { "Operation identity or package lease changed" }
+        require(record.call == call) { "Operation target, input or package lease changed" }
         require(record.attemptId == attemptId) { "Stale attempt" }
         val currentSources = sources.associateBy { it.id }
         require(currentSources.size == sources.size) { "Duplicate source identity" }
@@ -73,7 +72,7 @@ object OperationLedger {
     }
 
     private fun validate(ledger: ExecutionLedger) {
-        require(ledger.version == 1) { "Unsupported execution ledger version" }
+        require(ledger.version == 2) { "Unsupported execution ledger version" }
         require(ledger.operations.all { (id, record) -> id == record.call.id }) { "Invalid receipt identity" }
     }
 

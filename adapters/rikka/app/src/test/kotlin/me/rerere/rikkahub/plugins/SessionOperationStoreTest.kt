@@ -3,7 +3,8 @@ package me.rerere.rikkahub.plugins
 import dev.rikkahub.plugins.protocol.AttemptStatus
 import dev.rikkahub.plugins.protocol.OperationCall
 import dev.rikkahub.plugins.protocol.OperationResult
-import dev.rikkahub.plugins.protocol.RunRef
+import dev.rikkahub.plugins.protocol.BranchRef
+import dev.rikkahub.plugins.protocol.PackageLease
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
@@ -131,7 +132,8 @@ class SessionOperationStoreTest {
     private fun call(conversation: Conversation) = OperationCall(
         "command",
         "test/report",
-        RunRef(conversation.id.toString(), "branch", "run", 1, "package"),
-        JsonNull
+        BranchRef(conversation.id.toString(), "branch"),
+        JsonNull,
+        PackageLease("test", "package", 1)
     )
 }

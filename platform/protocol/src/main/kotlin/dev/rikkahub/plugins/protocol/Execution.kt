@@ -9,9 +9,14 @@ data class RunRef(
     val conversationId: String,
     val branchId: String,
     val runId: String,
-    val activationEpoch: Long,
-    val packageHash: String
+    val incarnation: Long = 0
 )
+
+@Serializable
+data class BranchRef(val conversationId: String, val branchId: String)
+
+@Serializable
+data class PackageLease(val pluginId: String, val packageHash: String, val activationEpoch: Long)
 
 @Serializable
 enum class GateKind { USER_PAUSE, TOOL_APPROVAL, PLUGIN_INPUT, OPERATION_DEPENDENCY, PLUGIN_FAULT }
@@ -44,8 +49,24 @@ data class RunState(
 }
 
 @Serializable
-data class OperationCall(val id: String, val type: String, val ref: RunRef, val input: JsonElement)
+data class OperationCall(
+    val id: String,
+    val type: String,
+    val target: BranchRef,
+    val input: JsonElement,
+    val handler: PackageLease,
+    /** Null means the trusted host/user invoked the operation. */
+    val caller: PackageLease? = null,
+    val run: RunRef? = null
+) {
+    init {
+        require(run == null || (run.conversationId == target.conversationId && run.branchId == target.branchId)) {
+            "Operation target and owning run disagree"
+        }
+    }
+}
 
+/** An omission set, not a contiguous range or a replacement algorithm. */
 @Serializable
 data class ProjectionPlan(val omit: Set<String> = emptySet())
 

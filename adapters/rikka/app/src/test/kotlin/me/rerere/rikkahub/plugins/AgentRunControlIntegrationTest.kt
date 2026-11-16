@@ -6,7 +6,6 @@ import dev.rikkahub.plugins.protocol.GateKind
 import dev.rikkahub.plugins.protocol.RunRef
 import dev.rikkahub.plugins.protocol.RunState
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.agent.*
 import me.rerere.ai.core.MessageRole
@@ -23,7 +22,7 @@ class AgentRunControlIntegrationTest {
     @Test
     fun frozenFrameAllowsTransientRetryButPauseResumeRevokesIt() = runTest {
         for (pauseDuringRetry in listOf(false, true)) {
-            var state = RunState(RunRef("c", "b", "r", 1, "package"), 2, 3)
+            var state = RunState(RunRef("c", "b", "r", 1), 2, 3)
             val frozenFrame = state.frameRevision
             var calls = 0
             val provider = object : Provider<ProviderSetting> {
