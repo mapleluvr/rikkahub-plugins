@@ -1,0 +1,680 @@
+From ebb501979bf8fca581cf2db572bc88ae262184e8 Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 04:55:55 +0800
+Subject: [PATCH] Route default context feature through persistent operations
+
+Patch-Id: registered-context-operations
+---
+ ai/src/main/java/me/rerere/ai/agent/Agent.kt  |   6 +
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt |   8 +-
+ .../rikkahub/data/ai/ChatRequestFactory.kt    |   8 +-
+ .../data/datastore/PreferencesStore.kt        |   2 +
+ .../rikkahub/data/datastore/Settings.kt       |   1 +
+ .../rikkahub/data/datastore/SettingsFields.kt |   1 +
+ .../ChatGenerationForegroundService.kt        |   2 +-
+ .../me/rerere/rikkahub/service/ChatService.kt | 292 ++++++------------
+ .../rikkahub/service/ConversationSession.kt   |   7 +-
+ .../rerere/rikkahub/ui/pages/chat/ChatList.kt |   8 +-
+ .../rerere/rikkahub/ui/pages/chat/ChatPage.kt |   2 +-
+ app/src/main/res/values/strings.xml           |   1 +
+ 12 files changed, 131 insertions(+), 207 deletions(-)
+
+diff --git a/ai/src/main/java/me/rerere/ai/agent/Agent.kt b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+index fa782b9d434b743766b9bdf91d2b8e377d41adb0..3b67dbbace4aebdcd9e8a22144ed6077cd33a7d0 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/Agent.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+@@ -55,6 +55,12 @@ sealed interface AgentDecision {
+ interface AgentControl {
+     suspend fun decide(context: AgentBoundaryContext): AgentDecision = AgentDecision.Proceed
+ 
++    /** Persist admission before the final synchronous check; called for every network attempt. */
++    suspend fun prepareModel(step: Int, attempt: Int): String? = null
++
++    /** Persist authoritative state before tool effects or subsequent requests. Never receives stream previews. */
++    suspend fun commit(message: UIMessage) {}
++
+     /** Trusted synchronous admission, repeated immediately before every Provider attempt. */
+     fun admitModel(step: Int, attempt: Int): String? = null
+ 
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index 24a5bb33622549a3af4271f5096d28dccfeddfe9..909bd8ccb64a00e9277ec83c068bad593381bc50 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -1,5 +1,6 @@
+ package me.rerere.ai.agent
+ 
++import kotlinx.coroutines.ensureActive
+ import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.flow.FlowCollector
+ import kotlinx.datetime.TimeZone
+@@ -149,8 +150,10 @@ internal class AgentLoop(
+         }
+     }
+ 
+-    private fun admitModel(attempt: Int) {
+-        request.control.admitModel(logicalSteps, attempt)?.let { token ->
++    private suspend fun admitModel(attempt: Int) {
++        val denied = request.control.prepareModel(logicalSteps, attempt) ?: request.control.admitModel(logicalSteps, attempt)
++        kotlinx.coroutines.currentCoroutineContext().ensureActive()
++        denied?.let { token ->
+             throw AgentYield(cursor(AgentBoundary.BeforeModel), token)
+         }
+     }
+@@ -319,6 +322,7 @@ internal class AgentLoop(
+     private fun findTool(name: String) = request.tools.find { it.name == name }
+ 
+     private suspend fun update(updated: UIMessage) {
++        request.control.commit(updated)
+         message = updated
+         events.emit(AgentEvent.MessageUpdated(updated))
+     }
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt
+index 45df3c838996121245a767dbb4f1a4a33ea4796e..d8dc8d5792b52e5814473d5c4673e2145ba9cec5 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt
+@@ -129,14 +129,12 @@ class ChatRequestFactory(
+     /**
+      * 本轮交给 runAgent 的请求和钩子。[messages] 的最后一条是助手消息时从它继续，否则新建一条助手消息。
+      * [processingStatus] 用来显示 OCR 这类输入转换的进度；[takePendingParts] 取出要在请求模型前写进助手消息的通知。
+-     * [pauseAfterTools] 在一批工具执行完之后调用，返回 true 时这次运行以 Paused 结束。
+      */
+     fun createAgent(
+         turn: ChatTurnContext,
+         messages: List<UIMessage>,
+         processingStatus: MutableStateFlow<String?>,
+         takePendingParts: suspend () -> List<UIMessagePart> = { emptyList() },
+-        pauseAfterTools: (UIMessage) -> Boolean = { false },
+     ): Pair<AgentRequest, AgentHooks> {
+         val request = AgentRequest(
+             provider = usageRecorder.wrap(
+@@ -169,7 +167,6 @@ class ChatRequestFactory(
+ 
+             override suspend fun pendingParts() = takePendingParts()
+ 
+-            override suspend fun shouldPause(message: UIMessage) = pauseAfterTools(message)
+         }
+         return request to hooks
+     }
+@@ -185,11 +182,12 @@ class ChatRequestFactory(
+         turn: ChatTurnContext,
+         messages: List<UIMessage>,
+         compressPrompt: String,
++        beforeDispatch: suspend () -> Unit = {},
+     ): String {
+         // 组装请求要把全部历史过一遍输入转换器，长对话要算好几秒：不能放在调用方的主线程上，
+         // 这段纯计算里也检查不到取消。放进独立的协程，调用方取消时 await 立刻返回、不用等它算完；
+         // 没算完的那份同时被取消，在下一个挂起点停下，最迟在发出请求之前
+-        val work = CoroutineScope(Dispatchers.IO).async { requestCompressionSummary(turn, messages, compressPrompt) }
++        val work = CoroutineScope(Dispatchers.IO).async { requestCompressionSummary(turn, messages, compressPrompt, beforeDispatch) }
+         return try {
+             work.await()
+         } finally {
+@@ -201,6 +199,7 @@ class ChatRequestFactory(
+         turn: ChatTurnContext,
+         messages: List<UIMessage>,
+         compressPrompt: String,
++        beforeDispatch: suspend () -> Unit,
+     ): String {
+         val (requestMessages, params) = buildStep(turn, messages)
+         // 压缩指令不经过输入转换器，模板转换器会把其中的花括号当成模板语法
+@@ -208,6 +207,7 @@ class ChatRequestFactory(
+             policy = turn.settings.retryPolicy(),
+             onRetry = { Log.w(TAG, "Compression request failed, retrying in ${it.delay}", it.cause) },
+         ) {
++            beforeDispatch()
+             usageRecorder.wrap(
+                 providerManager.getProviderByType(turn.providerSetting),
+                 UsageTag(UsageSource.COMPRESSION, turn.assistant.id, turn.conversationId),
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt b/app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt
+index caed8a6bd84e89357fa13ada23430db72e385b4d..d61d4f3749d0f7711ed21666294052c2d36f95a6 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/datastore/PreferencesStore.kt
+@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.edit
+ import androidx.datastore.preferences.core.emptyPreferences
+ import androidx.datastore.preferences.core.floatPreferencesKey
+ import androidx.datastore.preferences.core.intPreferencesKey
++import androidx.datastore.preferences.core.stringSetPreferencesKey
+ import androidx.datastore.preferences.core.stringPreferencesKey
+ import androidx.datastore.preferences.preferencesDataStoreFile
+ import kotlinx.coroutines.CancellationException
+@@ -128,6 +129,7 @@ class SettingsStore internal constructor(
+         val OCR_PROMPT = stringPreferencesKey("ocr_prompt")
+ 
+         // 自动压缩
++        val DISABLED_PLUGIN_FEATURES = stringSetPreferencesKey("disabled_plugin_features")
+         val ENABLE_AUTO_COMPRESS = booleanPreferencesKey("enable_auto_compress")
+         val AUTO_COMPRESS_THRESHOLD = floatPreferencesKey("auto_compress_threshold")
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/datastore/Settings.kt b/app/src/main/java/me/rerere/rikkahub/data/datastore/Settings.kt
+index 7139ffa026e2102a67daa7fb6c8da4e7bd74101e..537a255052c22cf9ef50b4fd66ce03d429635815 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/datastore/Settings.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/datastore/Settings.kt
+@@ -54,6 +54,7 @@ data class Settings(
+     val enableSuggestion: Boolean = true,
+     val suggestionPrompt: String = DEFAULT_SUGGESTION_PROMPT,
+     // 回复结束后上下文占用达到聊天模型上下文窗口的 autoCompressThreshold 时自动压缩历史
++    val disabledPluginFeatures: Set<String> = emptySet(),
+     val enableAutoCompress: Boolean = true,
+     val autoCompressThreshold: Float = 0.8f,
+     val ocrModelId: Uuid = Uuid.random(),
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/datastore/SettingsFields.kt b/app/src/main/java/me/rerere/rikkahub/data/datastore/SettingsFields.kt
+index d30b10ee67519bfc730e38dd48ca2cd5df0d818e..3a055294a1838b08380920f1a85950b6d5807af3 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/datastore/SettingsFields.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/datastore/SettingsFields.kt
+@@ -117,6 +117,7 @@ internal val SETTINGS_FIELDS: List<SettingsField<*, *>> = with(SettingsStore) {
+         plain(OCR_PROMPT, Settings::ocrPrompt) { copy(ocrPrompt = it) },
+ 
+         // 自动压缩
++        plain(DISABLED_PLUGIN_FEATURES, Settings::disabledPluginFeatures) { copy(disabledPluginFeatures = it) },
+         plain(ENABLE_AUTO_COMPRESS, Settings::enableAutoCompress) { copy(enableAutoCompress = it) },
+         plain(AUTO_COMPRESS_THRESHOLD, Settings::autoCompressThreshold) { copy(autoCompressThreshold = it) },
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt
+index 6e5ddbb75fcbdcfcfb20bfab8bee1438af412a40..0349428ab8ef7f1c55c118dde8e81e4aececda96 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt
+@@ -170,7 +170,7 @@ class ChatGenerationForegroundService : Service() {
+                 getString(
+                     when (generation.activity) {
+                         SessionActivity.Generating -> R.string.notification_live_update_title
+-                        SessionActivity.Compressing -> R.string.chat_page_compressing
++                        SessionActivity.Operation -> R.string.plugin_operation_running
+                     }
+                 )
+             )
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 2046713226147dd0c3502573642956a390af18f4..6677692c18664eb417aea78a4764df3b1b612a31 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -26,6 +26,10 @@ import kotlinx.coroutines.flow.update
+ import kotlinx.coroutines.isActive
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.withContext
++import dev.rikkahub.plugins.protocol.OperationCall
++import me.rerere.rikkahub.plugins.*
++import me.rerere.rikkahub.plugins.builtin.BuiltinContextFeature
++import me.rerere.rikkahub.plugins.builtin.CompactInput
+ import me.rerere.ai.agent.AgentEvent
+ import me.rerere.ai.agent.AgentFinishReason
+ import me.rerere.ai.agent.RetryAttempt
+@@ -47,7 +51,6 @@ import me.rerere.rikkahub.data.ai.ConversationMetaGenerator
+ import me.rerere.rikkahub.data.ai.MemoryConsolidationScheduler
+ import me.rerere.rikkahub.data.ai.TranslationHandler
+ import me.rerere.rikkahub.data.ai.mcp.McpManager
+-import me.rerere.rikkahub.data.ai.prompts.buildCompressPrompt
+ import me.rerere.rikkahub.data.ai.tools.InvalidMcpServerNamesException
+ import me.rerere.rikkahub.data.ai.tools.shouldUseExternalWebSearch
+ import me.rerere.rikkahub.data.datastore.SettingsStore
+@@ -66,9 +69,7 @@ import me.rerere.rikkahub.data.model.fork
+ import me.rerere.rikkahub.data.model.getAssistantOf
+ import me.rerere.rikkahub.data.model.getChatModelOf
+ import me.rerere.rikkahub.data.model.getStoredAssistantOf
+-import me.rerere.rikkahub.data.model.insertContextCheckpoint
+ import me.rerere.rikkahub.data.model.isAwaitingToolApproval
+-import me.rerere.rikkahub.data.model.lastContextTokens
+ import me.rerere.rikkahub.data.model.localFileUrls
+ import me.rerere.rikkahub.data.model.replaceUserRegexes
+ import me.rerere.rikkahub.data.model.selectBranch
+@@ -121,6 +122,14 @@ class ChatService(
+     private val folderRepository: FolderRepository,
+     private val backgroundShellManager: BackgroundShellManager,
+ ) {
++    private val builtinContext = BuiltinContextFeature { source, messages, prompt, beforeEffect ->
++        val turn = requestFactory.createContext(settingsStore.awaitLoaded(), source)
++        requestFactory.generateCompressionSummary(turn, source.projectedContext(messages), prompt, beforeEffect)
++    }
++    private val operationDispatcher = SessionOperationDispatcher(listOf(builtinContext.operation)) { lease, _ ->
++        lease.pluginId !in settingsStore.settingsFlow.value.disabledPluginFeatures
++    }
++
+     /** 一次 agent 运行发给模型的消息，和回复要写进的节点 */
+     private class ReplyTarget(val history: List<UIMessage>, val nodeId: Uuid) {
+         /** 接着已有的助手消息写时是它的 id，新开回复时为空 */
+@@ -150,6 +159,7 @@ class ChatService(
+ 
+         /** 没能完成：错误已经报告给用户，消息队列也已暂停 */
+         data object Failed : TurnResult
++        data object Waiting : TurnResult
+     }
+ 
+     private val conversationStore = object : ConversationStore {
+@@ -727,77 +737,75 @@ class ChatService(
+             warnIfToolsUnavailable(turn, conversationId)
+ 
+             var finishReason: AgentFinishReason? = null
+-            // 上一段是压缩后新开的；摘要加系统提示词本身就超过阈值时再压也没用，这一轮不再压缩
+-            var afterCompression = false
+-            var compressionUseless = false
++            var afterOperation = false
++            val run = SessionAgentRun.open(session, target.history) { boundary, _ ->
++                builtinContext.boundaryOperation(
++                    boundary, session.state.value, settingsStore.settingsFlow.value, turn.model, canCompress, afterOperation
++                )
++            }
+             try {
+                 while (true) {
+                     val replyNodeId = target.nodeId
+-                    val freshReply = afterCompression
+                     val (request, hooks) = requestFactory.createAgent(
+                         turn = turn,
+                         messages = target.history,
+                         processingStatus = session.processingStatus,
+                         takePendingParts = session.inbox::takeNotices,
+-                        pauseAfterTools = pause@{ message ->
+-                            if (!canCompress || compressionUseless) return@pause false
+-                            // 同一条回复只试一次，压缩失败后接着它写时不再重试
+-                            if (message.id == session.autoCompressedReplyId) return@pause false
+-                            if (!reachesAutoCompressThreshold(turn.model, message.contextTokens())) return@pause false
+-                            if (freshReply && (message.stepCount ?: 0) <= 1) {
+-                                compressionUseless = true
+-                                return@pause false
+-                            }
+-                            true
+-                        },
+                     )
+                     finishReason = null
+-                    runAgent(request, hooks).flowOn(Dispatchers.IO).collect { event ->
+-                        when (event) {
+-                            is AgentEvent.MessageUpdated -> {
+-                                // 生成过程中只有网络重试的提示会留着，收到新内容说明重试已经成功
+-                                session.processingStatus.value = null
+-                                session.update { it.upsertMessage(replyNodeId, event.message) }
+-                                session.replyMessageId.value = event.message.id
+-                                // 通知等边缘副作用由 ChatNotificationManager 消费；
+-                                // tryEmit 不挂起，事件丢失只影响单次通知更新，不能反压生成链
+-                                appEventBus.tryEmit(
+-                                    AppEvent.ChatGenerationUpdate(conversationId, event.message, senderName)
+-                                )
+-                            }
++                    withContext(Dispatchers.IO) {
++                        runAgent(run.bind(request, replyNodeId), run.hooks(hooks)).collect { event ->
++                            run.accept(event)
++                            when (event) {
++                                is AgentEvent.MessageUpdated -> {
++                                    // 生成过程中只有网络重试的提示会留着，收到新内容说明重试已经成功
++                                    session.processingStatus.value = null
++                                    session.update { it.upsertMessage(replyNodeId, event.message) }
++                                    session.replyMessageId.value = event.message.id
++                                    // 通知等边缘副作用由 ChatNotificationManager 消费；
++                                    // tryEmit 不挂起，事件丢失只影响单次通知更新，不能反压生成链
++                                    appEventBus.tryEmit(
++                                        AppEvent.ChatGenerationUpdate(conversationId, event.message, senderName)
++                                    )
++                                }
+ 
+-                            is AgentEvent.Retrying -> {
+-                                logRetry(event.attempt)
+-                                session.processingStatus.value = retryStatus(event.attempt)
+-                            }
++                                is AgentEvent.Retrying -> {
++                                    logRetry(event.attempt)
++                                    session.processingStatus.value = retryStatus(event.attempt)
++                                }
+ 
+-                            is AgentEvent.PreviewReset -> {
+-                                session.update { latest ->
+-                                    event.authoritative?.let { latest.upsertMessage(replyNodeId, it) }
+-                                        ?: latest.deleteMessage(event.replyId) ?: latest
++                                is AgentEvent.PreviewReset -> {
++                                    session.update { latest ->
++                                        event.authoritative?.let { latest.upsertMessage(replyNodeId, it) }
++                                            ?: latest.deleteMessage(event.replyId) ?: latest
++                                    }
++                                    session.replyMessageId.value = event.authoritative?.id
+                                 }
+-                                session.replyMessageId.value = event.authoritative?.id
+-                            }
+ 
+-                            is AgentEvent.BudgetExhausted -> {
+-                                finishReason = AgentFinishReason.StepLimitReached
+-                            }
++                                is AgentEvent.BudgetExhausted -> {
++                                    finishReason = AgentFinishReason.StepLimitReached
++                                }
+ 
+-                            is AgentEvent.Yielded -> error("Run controller requires a session coordinator")
++                                is AgentEvent.Yielded -> Unit
+ 
+-                            is AgentEvent.Finished -> {
+-                                Log.i(TAG, "runTurn: finished (${event.reason})")
+-                                finishReason = event.reason
++                                is AgentEvent.Finished -> {
++                                    Log.i(TAG, "runTurn: finished (${event.reason})")
++                                    finishReason = event.reason
++                                }
+                             }
+                         }
+                     }
+-                    if (finishReason != AgentFinishReason.Paused) break
+-
+-                    afterCompression = compressMidTurn(session)
+-                    // 压缩成功：检查点在末尾，新开一条回复；失败：接着刚才那条回复写
++                    val operation = run.pending
++                    if (operation == null) break
++                    afterOperation = executeBoundaryOperation(session, operation)
++                    if (!afterOperation && !operationDispatcher.continueRunAfterFailure(operation)) break
++                    run.operationFinished()
+                     target = replyTargetOf(session.state.value, regenerateNodeId = null)
+                     session.replyMessageId.value = target.continuedMessageId
+                 }
++            } catch (error: Throwable) {
++                withContext(NonCancellable) { run.cancel() }
++                throw error
+             } finally {
+                 withContext(NonCancellable) {
+                     session.processingStatus.value = null
+@@ -815,7 +823,10 @@ class ChatService(
+                 }
+             }
+ 
+-            val reason = checkNotNull(finishReason)
++            val reason = finishReason ?: run {
++                session.inbox.pause()
++                return TurnResult.Waiting
++            }
+             // 等待审批时这一轮还没结束，标题、建议和记忆整理等审批之后再做
+             if (reason !is AgentFinishReason.AwaitingApproval) {
+                 sessionManager.launchWithSession(conversationId) { generateTitle(conversationId) }
+@@ -988,174 +999,75 @@ class ChatService(
+         }
+     }
+ 
+-    /**
+-     * 回复结束后上下文占用达到设置的比例时开一个任务自动压缩，返回这个任务；不需要压缩时返回 null。
+-     * 上一轮失败或被停止时队列是暂停的，这时不压缩，等用户恢复队列、下一轮结束后再看。
+-     */
+-    private fun launchAutoCompressIfNeeded(session: ConversationSession): Job? {
+-        synchronized(session) {
+-            val settings = settingsStore.settingsFlow.value
+-            if (!settings.enableAutoCompress || !session.isInitialized) return null
+-            if (!session.canStartNextTurn || session.inbox.state.value.paused) return null
+-            val conversation = session.state.value
+-            val reply = conversation.currentMessages.lastOrNull { it.role == MessageRole.ASSISTANT } ?: return null
+-            if (reply.id == session.autoCompressedReplyId) return null
+-            // 已经压缩过的话检查点在回复之后，这里取到的是 null
+-            val model = settings.getChatModelOf(conversation) ?: return null
+-            if (!reachesAutoCompressThreshold(model, conversation.lastContextTokens())) return null
+-
+-            session.autoCompressedReplyId = reply.id
+-            return launchCompressionJob(
+-                session = session,
+-                additionalPrompt = "",
+-                keepRecentMessages = 0,
+-                // 建议是这一轮刚生成的，自动压缩不清掉
+-                clearSuggestions = false,
+-            ) { result ->
+-                result.onFailure { e ->
+-                    Log.w(TAG, "Auto compression failed", e)
+-                    // 这一轮的回复已经完成，压缩失败不暂停队列；取消时 addError 会忽略
+-                    addError(e, session.id, title = context.getString(R.string.error_title_auto_compress))
+-                }
+-            }
++    /** Feature policy supplies the command; the session owns scheduling and cancellation. */
++    private fun launchAutoCompressIfNeeded(session: ConversationSession): Job? = synchronized(session) {
++        if (!session.isInitialized || !session.canStartNextTurn || session.inbox.state.value.paused) return null
++        val current = session.state.value
++        val settings = settingsStore.settingsFlow.value
++        val model = settings.getChatModelOf(current) ?: return null
++        val command = builtinContext.automaticCommand(current, settings, model) ?: return null
++        val call = current.operationCall(builtinContext.operation, builtinContext.input(), command)
++        launchOperationJob(session, call) { result ->
++            result.onFailure { addError(it, session.id, title = context.getString(R.string.error_title_auto_compress)) }
+         }
+     }
+ 
+-    /**
+-     * 开一个压缩任务占住任务槽，调用方须持有会话锁并确认槽是空的。
+-     *
+-     * 和生成共用任务槽：期间界面显示加载中，新消息照常排队、压缩完再发，停止生成能取消它，
+-     * 重新生成会取消它，审批会排在它后面。[onResult] 恰好调用一次，取消时收到 CancellationException。
+-     * 失败只交给 [onResult]，任务本身正常结束，免得被当成生成失败暂停收件箱。
+-     */
++    /** Compatibility entry for the existing manual dialog; execution uses the registered operation. */
+     private fun launchCompressionJob(
+         session: ConversationSession,
+         additionalPrompt: String,
+         keepRecentMessages: Int,
+         clearSuggestions: Boolean,
+         onResult: (Result<Unit>) -> Unit,
++    ): Job = launchOperationJob(
++        session,
++        session.state.value.operationCall(
++            builtinContext.operation,
++            builtinContext.input(CompactInput(additionalPrompt, keepRecentMessages, clearSuggestions)),
++        ),
++        onResult,
++    )
++
++    private fun launchOperationJob(
++        session: ConversationSession,
++        call: OperationCall,
++        onResult: (Result<Unit>) -> Unit,
+     ): Job {
+-        // 成功回调之后、任务结束之前被取消的话完成回调还会再报一次取消，只认第一次
+         val delivered = AtomicBoolean(false)
+         val deliver = { result: Result<Unit> -> if (delivered.compareAndSet(false, true)) onResult(result) }
+-        val job = launchGenerationJob(conversationId = session.id, activity = SessionActivity.Compressing) {
+-            session.processingStatus.value = context.getString(R.string.chat_page_compressing)
++        val job = launchGenerationJob(conversationId = session.id, activity = SessionActivity.Operation) {
++            session.processingStatus.value = operationDispatcher.label(call)
+             try {
+-                insertCompressionCheckpoint(session, additionalPrompt, keepRecentMessages, clearSuggestions)
++                operationDispatcher.execute(session, call)
+                 deliver(Result.success(Unit))
+-            } catch (e: Exception) {
+-                if (e is CancellationException) throw e
+-                deliver(Result.failure(e))
++            } catch (error: Exception) {
++                if (error is CancellationException) throw error
++                deliver(Result.failure(error))
+             } finally {
+                 session.processingStatus.value = null
+             }
+         }
+-        // 包括任务还没进入函数体就被取消的情况
+         job.invokeOnCompletion { cause -> if (cause != null) deliver(Result.failure(cause)) }
+-        session.setJob(job, activity = SessionActivity.Compressing)
++        session.setJob(job, activity = SessionActivity.Operation)
+         return job
+     }
+ 
+-    private fun reachesAutoCompressThreshold(model: Model, contextTokens: Int?): Boolean {
+-        val settings = settingsStore.settingsFlow.value
+-        if (!settings.enableAutoCompress || contextTokens == null || model.contextLength <= 0) return false
+-        return contextTokens >= model.contextLength * settings.autoCompressThreshold
+-    }
+-
+-    /**
+-     * 一轮回复的中途压缩上下文：这时回复里的工具都已经执行完，把到它为止的全部消息压成检查点。
+-     * 在生成任务里直接做，任务槽和前台服务一直占着，停止生成同样能取消。
+-     *
+-     * @return 是否压缩成功；失败时报告错误，这一轮照常继续
+-     */
+-    private suspend fun compressMidTurn(session: ConversationSession): Boolean {
+-        val reply = session.state.value.currentMessages.lastOrNull { it.role == MessageRole.ASSISTANT }
+-        session.autoCompressedReplyId = reply?.id
+-        // 压缩前把已经生成的内容存下来
+-        session.finishGeneration()
+-        session.setActivity(SessionActivity.Compressing)
+-        session.processingStatus.value = context.getString(R.string.chat_page_compressing)
++    private suspend fun executeBoundaryOperation(session: ConversationSession, call: OperationCall): Boolean {
++        session.setActivity(SessionActivity.Operation)
++        session.processingStatus.value = operationDispatcher.label(call)
+         return try {
+-            insertCompressionCheckpoint(
+-                session = session,
+-                additionalPrompt = "",
+-                keepRecentMessages = 0,
+-                clearSuggestions = false,
+-                midTurn = true,
+-            )
++            operationDispatcher.execute(session, call)
+             true
+-        } catch (e: Exception) {
+-            if (e is CancellationException) throw e
+-            Log.w(TAG, "Mid-turn compression failed", e)
+-            addError(e, session.id, title = context.getString(R.string.error_title_auto_compress))
++        } catch (error: Exception) {
++            if (error is CancellationException) throw error
++            addError(error, session.id)
+             false
+         } finally {
+             session.processingStatus.value = null
+-            // 被取消时任务槽可能已经换成别的任务，不能改它的状态
+             if (currentCoroutineContext().isActive) session.setActivity(SessionActivity.Generating)
+         }
+     }
+ 
+-    /**
+-     * 把上一个检查点之后、最近 [keepRecentMessages] 条之前的消息压缩成摘要检查点。
+-     * 只在占着任务槽的任务里调用：期间别的生成开始时会先取消它，提交时不用再检查是否在生成。
+-     */
+-    private suspend fun insertCompressionCheckpoint(
+-        session: ConversationSession,
+-        additionalPrompt: String,
+-        keepRecentMessages: Int,
+-        clearSuggestions: Boolean,
+-        midTurn: Boolean = false,
+-    ) {
+-        val conversation = session.state.value
+-        val nodes = conversation.messageNodes
+-        val checkpointIndex = nodes.indexOfLast { it.currentMessage.isContextCheckpoint }
+-        // 压缩范围是 (checkpointIndex, endIndex)，之后的节点原样保留
+-        val endIndex = nodes.size - keepRecentMessages.coerceAtLeast(0)
+-        // 上一个检查点之后没有可压缩的消息
+-        if (endIndex <= checkpointIndex + 1) {
+-            throw IllegalStateException(
+-                context.getString(
+-                    if (keepRecentMessages > 0) {
+-                        R.string.chat_page_compress_not_enough_messages
+-                    } else {
+-                        R.string.chat_page_compress_nothing_to_compress
+-                    }
+-                )
+-            )
+-        }
+-        // 未完成的工具调用没有结果，请求会被服务端拒绝；压到检查点之前也再不会执行。
+-        // 保留区里的不发给压缩请求，压缩后照常留在检查点之后，不用检查
+-        check(nodes.subList(checkpointIndex + 1, endIndex).none { node ->
+-            node.currentMessage.getTools().any { it.isPending || it.canResumeExecution }
+-        }) { context.getString(R.string.chat_page_compress_handle_pending_tools) }
+-
+-        // 必须和对话用同一个模型、同一套请求组装，才能命中提示词缓存
+-        val turn = requestFactory.createContext(settingsStore.awaitLoaded(), conversation)
+-        val summary = requestFactory.generateCompressionSummary(
+-            turn = turn,
+-            messages = conversation.currentMessages.take(endIndex),
+-            compressPrompt = buildCompressPrompt(
+-                additionalPrompt = additionalPrompt,
+-                locale = Locale.getDefault().displayName,
+-                midTurn = midTurn,
+-            ),
+-        )
+-
+-        // 原消息原样保留，摘要插在压缩范围的最后一条消息之后。摘要生成期间对话可能已变化，
+-        // 因此按节点定位插入到最新状态。
+-        session.update { latest ->
+-            val updated = latest.insertContextCheckpoint(
+-                afterNodeId = nodes[endIndex - 1].id,
+-                summary = summary,
+-            ) ?: throw IllegalStateException(
+-                context.getString(R.string.chat_page_compress_conversation_changed)
+-            )
+-            if (clearSuggestions) updated.copy(chatSuggestions = emptyList()) else updated
+-        }
+-        session.flush()
+-    }
+-
+     // ---- 聊天页配置 ----
+ 
+     /**
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt b/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
+index 1a6d1b542d35ae6b2cc820c48dc3c4ae86ca9e64..150ffa6d22079b3161a13b1727206832112fdbe7 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
+@@ -297,9 +297,6 @@ class ConversationSession(
+     val canStartNextTurn: Boolean
+         get() = _generationJob.value == null && !state.value.isAwaitingToolApproval
+ 
+-    // 自动压缩已经为哪条回复试过；压缩失败后不再为同一条回复反复重试
+-    @Volatile
+-    var autoCompressedReplyId: Uuid? = null
+ 
+     val isInUse: Boolean
+         get() = refCount.get() > 0 || _generationJob.value != null ||
+@@ -395,8 +392,8 @@ enum class SessionActivity {
+     /** 生成回复：发送、重新生成、审批后继续 */
+     Generating,
+ 
+-    /** 压缩上下文：手动或自动 */
+-    Compressing,
++    /** 注册操作：手动触发或 Agent 边界等待 */
++    Operation,
+ }
+ 
+ internal suspend fun afterPreviousGeneration(previous: Job?, block: suspend () -> Unit) {
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt
+index 24cbd7ffe7fc4d9114ca451e98c5c70d871e6f6f..ff873f7037c53f290047a450add0e3d746f94371 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt
+@@ -82,7 +82,7 @@ fun ChatList(
+     previewListState: LazyListState,
+     selectionState: ChatSelectionState,
+     loading: Boolean,
+-    compressing: Boolean = false,
++    runningOperation: Boolean = false,
+     processingStatus: String? = null,
+     previewMode: Boolean,
+     onPreviewModeChange: (Boolean) -> Unit,
+@@ -144,7 +144,7 @@ fun ChatList(
+                 conversation = conversation,
+                 state = state,
+                 loading = loading,
+-                compressing = compressing,
++                runningOperation = runningOperation,
+                 processingStatus = processingStatus,
+                 settings = settings,
+                 hazeState = hazeState,
+@@ -216,7 +216,7 @@ private fun ChatListNormal(
+     conversation: Conversation,
+     state: LazyListState,
+     loading: Boolean,
+-    compressing: Boolean,
++    runningOperation: Boolean,
+     processingStatus: String? = null,
+     settings: Settings,
+     hazeState: HazeState,
+@@ -364,7 +364,7 @@ private fun ChatListNormal(
+                             model = node.currentMessage.modelId?.let(modelById::get)
+                                 ?: node.currentMessage.snapshotModel(),
+                             assistant = assistant,
+-                            loading = loading && !compressing && index == lastMessageIndex,
++                            loading = loading && !runningOperation && index == lastMessageIndex,
+                             onRegenerate = {
+                                 onRegenerate(node.currentMessage)
+                             },
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt
+index b7c9719957de5f12978af8a7abf10203b88377cc..cf080cb4e2b9602824f443edba4ab8aaaefc51c4 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt
+@@ -465,7 +465,7 @@ private fun ChatPageContent(
+                 previewListState = previewListState,
+                 selectionState = selectionState,
+                 loading = loadingJob != null,
+-                compressing = sessionActivity == SessionActivity.Compressing,
++                runningOperation = sessionActivity == SessionActivity.Operation,
+                 processingStatus = processingStatus,
+                 previewMode = previewMode,
+                 onPreviewModeChange = { previewMode = it },
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 2582f86dd43307ef9bb8c54556e1d1695f0f4beb..bb90ca8e6998478f12e68c3a4dfc50df87c2d27d 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -257,6 +257,7 @@
+   <string name="chat_page_compress_context_desc">Compress the conversation into a summary to save tokens</string>
+   <string name="chat_page_compress_context_title">Compress Conversation History</string>
+   <string name="chat_page_compressing">Compressing...</string>
++  <string name="plugin_operation_running">Running operation…</string>
+   <string name="chat_page_conversation_system_prompt">Conversation System Prompt</string>
+   <string name="chat_page_conversation_system_prompt_clear">Clear</string>
+   <string name="chat_page_conversation_system_prompt_hint">Override the assistant\'s system prompt for this conversation</string>
