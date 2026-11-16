@@ -71,6 +71,7 @@ class SessionOperationStore(private val session: ConversationSession) {
         call: OperationCall,
         attemptId: String,
         result: OperationResult,
+        displaySourceIds: List<String> = call.frame.map { it.id },
         applyResult: (Conversation) -> Conversation = { it }
     ) {
         session.commitExtension(incarnation) { current ->
@@ -86,7 +87,9 @@ class SessionOperationStore(private val session: ConversationSession) {
                 val inserted = adopted.messageNodes.flatMap { node -> node.messages }
                     .map { message -> message.id.toString() }.filter { id -> id !in existing }
                 adopted.withExecutionLedger(settled.copy(
-                    messageLineages = settled.messageLineages + inserted.associateWith { call.frame.map { stamp -> stamp.id } }
+                    operations = settled.operations + (call.id to settled.operations.getValue(call.id)
+                        .copy(adoptedMessageIds = inserted)),
+                    messageLineages = settled.messageLineages + inserted.associateWith { displaySourceIds },
                 ))
             }
         }
@@ -99,16 +102,16 @@ class SessionOperationStore(private val session: ConversationSession) {
             val ledger = current.executionLedger()
             val record = ledger.operations.getValue(call.id)
             check(record.status == dev.rikkahub.plugins.protocol.AttemptStatus.RUNNING)
-            check(record.modelAttempts < record.maxModelAttempts) { "Operation request budget exhausted" }
+            current.requireOperationEffectAllowed(call)
+            requireOperationAdmission(record.modelAttempts < record.maxModelAttempts, "Operation request budget exhausted")
             var runs = ledger.runs
             call.run?.let { ref ->
                 val run = runs.getValue(ref.runId)
                 val state = run.state
-                check(state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE)
-                check(state.gates.values.all { it.id == call.id }) { "Owning run is paused" }
-                check(state.attemptsUsed < state.maxAttempts) { "Owning run request budget exhausted" }
+                requireOperationAdmission(state.attemptsUsed < state.maxAttempts, "Owning run request budget exhausted")
                 val newStep = if (record.modelAttempts == 0) 1 else 0
-                check(state.stepsUsed + state.operationStepsUsed + newStep <= state.maxSteps) { "Owning run model budget exhausted" }
+                requireOperationAdmission(state.stepsUsed + state.operationStepsUsed + newStep <= state.maxSteps,
+                    "Owning run model budget exhausted")
                 runs = runs + (ref.runId to run.copy(state = state.copy(
                     attemptsUsed = state.attemptsUsed + 1,
                     operationStepsUsed = state.operationStepsUsed + newStep,
@@ -117,8 +120,37 @@ class SessionOperationStore(private val session: ConversationSession) {
             }
             current.withExecutionLedger(ledger.copy(
                 runs = runs,
-                operations = ledger.operations + (call.id to record.copy(modelAttempts = record.modelAttempts + 1)),
+                operations = ledger.operations + (call.id to record.copy(
+                    modelAttempts = record.modelAttempts + 1, effectAdmissions = record.effectAdmissions + 1)),
             ))
+        }
+    }
+
+    suspend fun admitEffect(call: OperationCall, validate: (Conversation) -> Unit) {
+        session.commitExtension(incarnation) { current ->
+            validate(current)
+            current.requireOperationEffectAllowed(call)
+            val ledger = current.executionLedger()
+            val record = ledger.operations.getValue(call.id)
+            check(record.status == dev.rikkahub.plugins.protocol.AttemptStatus.RUNNING)
+            current.withExecutionLedger(ledger.copy(operations = ledger.operations +
+                (call.id to record.copy(effectAdmissions = record.effectAdmissions + 1))))
+        }
+    }
+
+    /** A host rejection may reset pure preparation only when no effect permit was ever handed out. */
+    suspend fun refusedBeforeEffect(id: String, waiting: Boolean) {
+        session.commitExtension(incarnation) { current ->
+            val ledger = current.executionLedger()
+            val record = ledger.operations.getValue(id)
+            if (record.effectAdmissions == 0 && record.modelAttempts == 0 &&
+                record.status == dev.rikkahub.plugins.protocol.AttemptStatus.RUNNING) {
+                current.withExecutionLedger(ledger.copy(operations = ledger.operations + (id to record.copy(
+                    status = if (waiting) dev.rikkahub.plugins.protocol.AttemptStatus.PREPARED
+                        else dev.rikkahub.plugins.protocol.AttemptStatus.CANCELLED,
+                    attemptId = null,
+                ))))
+            } else current.withExecutionLedger(OperationLedger.cancel(ledger, id))
         }
     }
 

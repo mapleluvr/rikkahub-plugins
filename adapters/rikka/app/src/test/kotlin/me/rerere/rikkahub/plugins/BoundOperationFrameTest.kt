@@ -97,8 +97,10 @@ class BoundOperationFrameTest {
         val session = open(source)
         val run = SessionAgentRun.open(session, source.currentMessages) { _, _ -> null }
         val feature = BuiltinContextFeature { _, _, _, _ -> "summary A" }
-        SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }.execute(session,
-            session.state.value.operationCall(feature.operation, feature.input(), run = run.ref))
+        SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }.execute(
+            session,
+            session.state.value.operationCall(feature.operation, feature.input(), run = run.ref)
+        )
         session.update { it.editMessage(a.id, listOf(UIMessagePart.Text("B"))) }
         val tail = UIMessage.user("tail B")
         session.update { it.copy(messageNodes = it.messageNodes + tail.toMessageNode()) }

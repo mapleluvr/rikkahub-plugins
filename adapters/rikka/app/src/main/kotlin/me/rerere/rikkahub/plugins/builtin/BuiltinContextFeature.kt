@@ -25,6 +25,8 @@ import me.rerere.rikkahub.plugins.PreparedConversationOperation
 import me.rerere.rikkahub.plugins.executionLedger
 import me.rerere.rikkahub.plugins.forInputPath
 import me.rerere.rikkahub.plugins.pluginSources
+import me.rerere.rikkahub.plugins.sourceStamp
+import java.security.MessageDigest
 import me.rerere.rikkahub.utils.JsonInstant
 import java.util.Locale
 
@@ -111,8 +113,22 @@ class BuiltinContextFeature(
         if (tokens == null || tokens < model.contextLength * settings.autoCompressThreshold) return null
         // A fresh summary that already fills the context cannot be improved by immediately summarizing it again.
         if (afterOperation && (last.stepCount ?: 0) <= 1) return null
-        val command = "$ID/auto/${last.id}"
-        return command.takeUnless { it in conversation.executionLedger().operations }
+        val prefix = "$ID/auto/${last.id}"
+        val records = conversation.executionLedger().operations
+        // An uncertain or completed effect must not be retried merely because visible content changed.
+        if (records.values.any { record ->
+                (record.call.id == prefix || record.call.id.startsWith("$prefix/")) &&
+                    record.status != dev.rikkahub.plugins.protocol.AttemptStatus.CANCELLED
+            }) return null
+        val messages = conversation.currentMessages.map { if (it.id == last.id) last else it }
+        val condition = buildString {
+            append("${model.id}:${model.contextLength}:${settings.autoCompressThreshold}\n")
+            (messages + listOfNotNull(last.takeUnless { candidate -> messages.any { it.id == candidate.id } }))
+                .forEach { append("${it.sourceStamp()}\n") }
+        }
+        val version = MessageDigest.getInstance("SHA-256").digest(condition.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return "$prefix/$version".takeUnless { it in records }
     }
 
     private fun prepare(source: Conversation, input: CompactInput): PreparedConversationOperation {

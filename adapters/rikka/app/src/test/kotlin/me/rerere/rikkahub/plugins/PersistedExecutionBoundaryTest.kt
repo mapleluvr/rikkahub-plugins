@@ -75,7 +75,10 @@ class PersistedExecutionBoundaryTest {
                 assertEquals(0, nextProvider.calls)
                 assertTrue(nextEffects.isEmpty())
             } else {
-                assertTrue("Expected continuation at ${checkpoint.boundary}: $events", events.last() is AgentEvent.Finished)
+                assertTrue(
+                    "Expected continuation at ${checkpoint.boundary}: $events",
+                    events.last() is AgentEvent.Finished
+                )
                 assertEquals(persistedTools.filter { !it.isExecuted }.map { it.toolName }, nextEffects)
                 assertEquals(1, nextProvider.calls)
                 val finished = (events.last() as AgentEvent.Finished).message
@@ -111,15 +114,27 @@ class PersistedExecutionBoundaryTest {
         val provider = ProviderProbe()
         var effects = 0
         val tools = listOf("one", "two").map { name ->
-            Tool(name = name, description = name, executionVersion = "v1", execute = { effects++; listOf(UIMessagePart.Text("ok")) })
+            Tool(name = name, description = name, executionVersion = "v1", execute = {
+                effects++
+                listOf(UIMessagePart.Text("ok"))
+            })
         }
-        runAgent(run.bind(request(provider, initial.currentMessages, tools), Uuid.random()), run.hooks(hooks)).collect(run::accept)
-        val cut = store.writes.map { it.second }.first { it.executionLedger().runs.values.single().boundary == "ToolPreflight" }
+        runAgent(
+            run.bind(request(provider, initial.currentMessages, tools), Uuid.random()),
+            run.hooks(hooks)
+        ).collect(run::accept)
+        val cut = store.writes.map { it.second }.first {
+            it.executionLedger().runs.values.single().boundary ==
+                "ToolPreflight"
+        }
         val restored = open(cut, FakeConversationStore(cut))
         val resumed = controller(restored)
         val changed = tools.map { it.copy(executionVersion = "v2") }
         val before = effects
-        val events = runAgent(resumed.bind(request(provider, cut.currentMessages, changed), Uuid.random()), resumed.hooks(hooks)).toList()
+        val events = runAgent(
+            resumed.bind(request(provider, cut.currentMessages, changed), Uuid.random()),
+            resumed.hooks(hooks)
+        ).toList()
         assertTrue(events.last() is AgentEvent.Yielded)
         assertEquals(before, effects)
     }
@@ -138,8 +153,11 @@ class PersistedExecutionBoundaryTest {
                         current.copy(messageNodes = current.messageNodes.map { node ->
                             node.copy(messages = node.messages.map { message ->
                                 message.copy(parts = message.parts.map { part ->
-                                    if (part is UIMessagePart.Tool && part.toolCallId == "one")
-                                        part.copy(approvalState = ToolApprovalState.Pending) else part
+                                    if (part is UIMessagePart.Tool && part.toolCallId == "one") {
+                                        part.copy(approvalState = ToolApprovalState.Pending)
+                                    } else {
+                                        part
+                                    }
                                 })
                             })
                         })
@@ -152,10 +170,15 @@ class PersistedExecutionBoundaryTest {
         val run = controller(session)
         var effects = 0
         val tools = listOf("one", "two").map { name ->
-            Tool(name = name, description = name, execute = { effects++; listOf(UIMessagePart.Text("ok")) })
+            Tool(name = name, description = name, execute = {
+                effects++
+                listOf(UIMessagePart.Text("ok"))
+            })
         }
-        val events = runAgent(run.bind(request(ProviderProbe(), initial.currentMessages, tools), Uuid.random()),
-            run.hooks(hooks)).toList()
+        val events = runAgent(
+            run.bind(request(ProviderProbe(), initial.currentMessages, tools), Uuid.random()),
+            run.hooks(hooks)
+        ).toList()
         assertTrue(revoked)
         assertTrue(events.last() is AgentEvent.Yielded)
         assertEquals(0, effects)

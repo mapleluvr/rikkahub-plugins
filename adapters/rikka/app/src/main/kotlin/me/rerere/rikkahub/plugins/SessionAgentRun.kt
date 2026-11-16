@@ -14,6 +14,13 @@ data class BoundaryOperation(
     val commandId: String
 )
 
+data class SessionResumePlan(
+    val history: List<UIMessage>,
+    val replyNodeId: Uuid,
+    val checkpoint: RunCheckpoint,
+    val cursor: AgentCursor?,
+)
+
 /** Adapts a logical persisted run to coroutine segments, without knowing individual operation semantics. */
 class SessionAgentRun private constructor(
     private val session: ConversationSession,
@@ -38,12 +45,39 @@ class SessionAgentRun private constructor(
         }
     }
 
+    /** Called after open consumes any settled operation, once for each execution segment. */
+    fun resumePlan(): SessionResumePlan {
+        val current = session.state.value
+        val checkpoint = current.executionLedger().runs.getValue(ref.runId)
+        val history = current.runInputMessages(ref.runId)
+        val node = checkpoint.replyNodeId?.let(Uuid::parse)
+            ?: history.lastOrNull()?.takeIf { it.role == MessageRole.ASSISTANT }
+                ?.let { current.getMessageNodeByMessageId(it.id)?.id }
+            ?: Uuid.random()
+        return SessionResumePlan(history, node, checkpoint, cursor)
+    }
+
+    fun bind(request: AgentRequest, plan: SessionResumePlan): AgentRequest {
+        val current = snapshot()
+        // Control gates may change after preparation; the live admission checks yield without cancelling the run.
+        check(plan.checkpoint.copy(state = current.state) == current && plan.cursor == cursor) {
+            "Resume input or execution position changed before binding"
+        }
+        check(request.messages == plan.history) { "Request and resume plan disagree" }
+        return bind(request, plan.replyNodeId)
+    }
+
     fun bind(request: AgentRequest, nodeId: Uuid): AgentRequest {
         val saved = snapshot()
         replyNodeId = saved.replyNodeId?.let(Uuid::parse) ?: nodeId
         val definitions = request.tools.associate { tool ->
-            tool.name to listOf(tool.executionVersion, tool.name, tool.description, tool.parameters().toString(),
-                me.rerere.rikkahub.BuildConfig.VERSION_CODE.toString()).joinToString("\n")
+            tool.name to listOf(
+                tool.executionVersion,
+                tool.name,
+                tool.description,
+                tool.parameters().toString(),
+                me.rerere.rikkahub.BuildConfig.VERSION_CODE.toString()
+            ).joinToString("\n")
         }
         val control = object : AgentControl {
             override suspend fun decide(context: AgentBoundaryContext): AgentDecision {
@@ -55,6 +89,14 @@ class SessionAgentRun private constructor(
                     return AgentDecision.Yield("Tool definitions changed")
                 }
                 if (expected.isEmpty()) store.update(ref) { it.copy(toolDefinitions = definitions) }
+                if (context.cursor.boundary == AgentBoundary.BeforeTool) {
+                    val message = checkNotNull(context.message)
+                    val tool = message.getTools().single { it.toolCallId == context.cursor.toolCallId }
+                    snapshot().approvalFailure(message, tool)?.let {
+                        store.addGate(ref, Gate("host.tool-approval-binding", GateKind.PLUGIN_FAULT))
+                        return AgentDecision.Yield(it)
+                    }
+                }
                 val operation = policy(context, ref)
                 if (operation != null) {
                     pending =
@@ -88,7 +130,8 @@ class SessionAgentRun private constructor(
             override fun resumeBlock(): String? = blocked()
 
             override fun admitTool(message: UIMessage, tool: me.rerere.ai.ui.UIMessagePart.Tool): String? =
-                blocked() ?: if (snapshot().state.frameRevision != preparedFrame) "Tool admission changed" else null
+                blocked() ?: snapshot().approvalFailure(message, tool)
+                    ?: if (snapshot().state.frameRevision != preparedFrame) "Tool admission changed" else null
 
             override suspend fun checkpoint(message: UIMessage, next: AgentCursor): String? {
                 var rejected: String? = null
@@ -107,20 +150,35 @@ class SessionAgentRun private constructor(
                                 previous.input != part.input || previous.toolName != part.toolName ||
                                     previous.approvalState != part.approvalState || previous.startedAt != null ->
                                     "Tool approval or input changed before effect"
+
                                 saved.state.status != RunStatus.ACTIVE || saved.state.gates.isNotEmpty() ||
                                     saved.state.frameRevision != preparedFrame -> "Tool admission changed"
+
                                 saved.toolDefinitions != definitions -> "Tool implementation changed"
+
+                                saved.approvalFailure(message, part) != null -> saved.approvalFailure(message, part)
+
                                 key in permits -> "Tool permit already consumed"
+
                                 else -> null
                             }
                             if (rejected != null) {
-                                val waiting = saved.copy(state = RunControl.addGate(
-                                    saved.state, Gate("host.tool-admission", GateKind.PLUGIN_FAULT)))
+                                val waiting = saved.copy(
+                                    state = RunControl.addGate(
+                                        saved.state,
+                                        Gate("host.tool-admission", GateKind.PLUGIN_FAULT)
+                                    )
+                                )
                                 return@commitExtension current.withExecutionLedger(
-                                    ledger.copy(runs = ledger.runs + (ref.runId to waiting)))
+                                    ledger.copy(runs = ledger.runs + (ref.runId to waiting))
+                                )
                             }
-                            permits = permits + (key to listOf(part.toolName, part.input,
-                                part.approvalState.toString(), definitions[part.toolName]).joinToString("\n"))
+                            permits = permits + (key to listOf(
+                                part.toolName,
+                                part.input,
+                                part.approvalState.toString(),
+                                definitions[part.toolName]
+                            ).joinToString("\n"))
                         }
                     }
                     val checkpoint = saved.copy(
@@ -179,7 +237,7 @@ class SessionAgentRun private constructor(
                 if (event.reason is AgentFinishReason.AwaitingApproval) {
                     val next = event.message.cursor(AgentBoundary.ToolPreflight, event.completedSteps)
                     saveCursor(next)
-                    store.addGate(ref, Gate(APPROVAL, GateKind.TOOL_APPROVAL))
+                    session.requestToolApprovals(ref, event.message)
                 } else {
                     store.update(ref) { old ->
                         old.copy(
@@ -210,8 +268,15 @@ class SessionAgentRun private constructor(
         val call = checkNotNull(pending)
         val current = session.state.value
         val saved = snapshot()
-        val inserted = current.executionLedger().messageLineages.filterValues { it == call.frame.map { stamp -> stamp.id } }.keys
-        val inputIds = (saved.inputIds + inserted).distinct()
+        val ledger = current.executionLedger()
+        val inserted = ledger.operations[call.id]?.adoptedMessageIds ?: ledger.messageLineages.filterValues {
+            it == call.frame.map { stamp -> stamp.id }
+        }.keys
+        val included = (saved.inputIds + inserted).toSet()
+        val inputIds = current.messageNodes.mapNotNull { node ->
+            node.messages.singleOrNull { it.id.toString() in included }?.id?.toString()
+        }
+        check(inputIds.size == included.size) { "Operation result path is missing or ambiguous" }
         val sameReply = inputIds.lastOrNull() == cursor?.messageId
         store.update(ref) {
             it.copy(
@@ -229,7 +294,7 @@ class SessionAgentRun private constructor(
         if (!sameReply) cursor = null
     }
 
-    suspend fun cancel() = store.cancel(ref)
+    suspend fun cancel() = session.cancelPluginRuns()
 
     private suspend fun saveCursor(value: AgentCursor) {
         store.update(ref) { old ->
@@ -245,13 +310,12 @@ class SessionAgentRun private constructor(
     }
 
     companion object {
-        private const val APPROVAL = "host.tool-approval"
         suspend fun open(
             session: ConversationSession,
             history: List<UIMessage>,
+            initialReplyNodeId: Uuid? = null,
             policy: suspend (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
         ): SessionAgentRun {
-            val last = history.lastOrNull()
             val branch =
                 history.lastOrNull { it.role == MessageRole.USER && !it.isContextCheckpoint }?.id?.toString() ?: "draft"
             val ledger = session.state.value.executionLedger()
@@ -261,13 +325,7 @@ class SessionAgentRun private constructor(
             val previous = active.singleOrNull()
             val store = SessionRunStore(session)
             val saved = if (previous != null) {
-                val owningMessage = session.state.value.messageNodes.flatMap { it.messages }
-                    .singleOrNull { it.id.toString() == previous.messageId }
-                if (owningMessage != null && owningMessage.getTools().none { it.isPending }) {
-                    store.resolveGate(previous.state.ref, APPROVAL)
-                } else {
-                    previous
-                }
+                previous
             } else {
                 val ref = RunRef(
                     session.id.toString(),
@@ -275,8 +333,13 @@ class SessionAgentRun private constructor(
                     Uuid.random().toString(),
                     session.incarnation.toLong()
                 )
-                store.create(RunCheckpoint(RunState(ref, 256, 1024), AgentBoundary.BeforeModel.name, 0,
-                    inputIds = history.map { it.id.toString() }))
+                store.create(RunCheckpoint(
+                    RunState(ref, 256, 1024),
+                    AgentBoundary.BeforeModel.name,
+                    0,
+                    inputIds = history.map { it.id.toString() },
+                    replyNodeId = initialReplyNodeId?.toString(),
+                ))
             }
             return SessionAgentRun(session, saved.state.ref, policy).also { controller ->
                 if (previous != null) {

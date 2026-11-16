@@ -9,14 +9,19 @@ import me.rerere.rikkahub.data.model.MessageNode
 /** Select a host-captured path without changing the user's browsing selection. */
 fun Conversation.forInputPath(ids: List<String>, includeTail: Boolean = false): Conversation {
     require(ids.distinct().size == ids.size) { "Duplicate frame identity" }
+    val indexByMessage = buildMap<String, Pair<Int, Int>> {
+        messageNodes.forEachIndexed { nodeIndex, node ->
+            node.messages.forEachIndexed { messageIndex, message ->
+                require(put(message.id.toString(), nodeIndex to messageIndex) == null) { "Duplicate message identity" }
+            }
+        }
+    }
     var position = -1
     val selected = ids.map { id ->
-        val index = messageNodes.indexOfFirst { node -> node.messages.any { it.id.toString() == id } }
-        require(index > position) { "Input path was removed or reordered" }
-        position = index
-        messageNodes[index].let { node ->
-            node.copy(selectIndex = node.messages.indexOfFirst { it.id.toString() == id })
-        }
+        val (nodeIndex, messageIndex) = requireNotNull(indexByMessage[id]) { "Input path was removed" }
+        require(nodeIndex > position) { "Input path was reordered" }
+        position = nodeIndex
+        messageNodes[nodeIndex].copy(selectIndex = messageIndex)
     }
     return copy(messageNodes = if (includeTail) {
         val byNode = selected.associateBy { it.id }
@@ -52,9 +57,13 @@ fun Conversation.restoreBrowsingSelection(previous: Conversation): Conversation 
 /** Fork copies historical display ownership only, never a run, permit or executable operation receipt. */
 fun Conversation.inheritPluginHistory(source: Conversation): Conversation {
     val ids = messageNodes.flatMap { node -> node.messages.map { it.id.toString() } }.toSet()
-    val inherited = runCatching { source.executionLedger().messageLineages }.getOrDefault(emptyMap())
-        .filter { (id, ancestors) -> id in ids && ancestors.all { it in ids } }
-    return if (inherited.isEmpty()) this else withExecutionLedger(ExecutionLedger(messageLineages = inherited))
+    val sourceLineages = runCatching { source.executionLedger().messageLineages }.getOrDefault(emptyMap())
+    val inherited = sourceLineages.filter { (id, ancestors) -> id in ids && ancestors.all { it in ids } }
+    // An older receipt may depend on a tail cut away by this fork. Never turn lost ownership into global visibility.
+    val safe = copy(messageNodes = messageNodes.filter { node ->
+        node.currentMessage.id.toString().let { it !in sourceLineages || it in inherited }
+    })
+    return if (inherited.isEmpty()) safe else safe.withExecutionLedger(ExecutionLedger(messageLineages = inherited))
 }
 
 fun Conversation.runInputMessages(runId: String): List<UIMessage> =

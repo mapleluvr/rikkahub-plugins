@@ -95,13 +95,20 @@ class PersistentRunLifecycleTest {
     fun v2EnvelopeIsPreservedAndActiveRunWaitsForExplicitReconciliation() = runBlocking {
         val original = Conversation.ofId(Uuid.random())
         val ref = RunRef(original.id.toString(), "old", "old-run")
-        val old = ExecutionLedger(version = 2, runs = mapOf(ref.runId to RunCheckpoint(RunState(ref, 5, 10), "BeforeModel", 0)))
+        val old =
+            ExecutionLedger(
+                version = 2,
+                runs = mapOf(ref.runId to RunCheckpoint(RunState(ref, 5, 10), "BeforeModel", 0))
+            )
         val source = original.withExecutionLedger(old).copy(pluginDraft = true)
         val store = Store(source, true)
         val session = ConversationSession(source.id, source, this, store, {})
         session.initialize({ source })
         assertEquals(3, session.state.value.executionLedger().version)
-        assertEquals(source.pluginState["host.execution"], session.state.value.pluginState["host.execution.previous.v2"])
+        assertEquals(
+            source.pluginState["host.execution"],
+            session.state.value.pluginState["host.execution.previous.v2"]
+        )
         assertTrue("host.legacy-recovery" in session.state.value.executionLedger().runs.getValue(ref.runId).state.gates)
         assertFalse(session.canStartNextTurn)
     }

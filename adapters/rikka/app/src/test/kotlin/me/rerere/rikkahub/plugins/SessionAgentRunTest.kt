@@ -54,6 +54,22 @@ class SessionAgentRunTest {
     }
 
     @Test
+    fun pauseBetweenResumePlanAndBindingWaitsWithoutCancellingTheRun() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("start")))
+        val store = FakeConversationStore(initial)
+        val session = open(initial, store)
+        val run = SessionAgentRun.open(session, initial.currentMessages) { _, _ -> null }
+        val plan = run.resumePlan()
+        SessionRunStore(session).addGate(run.ref, Gate("user", GateKind.USER_PAUSE))
+        val provider = ScriptedProvider()
+        val events = runAgent(run.bind(request(provider, plan.history), plan), run.hooks(hooks)).toList()
+        events.forEach { run.accept(it) }
+        assertTrue(events.single() is AgentEvent.Yielded)
+        assertEquals(0, provider.calls)
+        assertEquals(RunStatus.ACTIVE, session.state.value.executionLedger().runs.getValue(run.ref.runId).state.status)
+    }
+
+    @Test
     fun sourceEditDuringAsyncRequestPreparationPreventsProviderDispatch() = runBlocking {
         val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("original")))
         val store = FakeConversationStore(initial)
@@ -108,7 +124,8 @@ class SessionAgentRunTest {
         assertEquals(1, provider.calls)
         assertEquals(0, effects)
         val restored = open(initial, store)
-        restored.commitExtension { checkNotNull(it.withToolApproval("call", ToolApprovalState.Approved)) }
+        val approvalId = restored.state.value.currentMessages.last().getTools().single().approvalId!!
+        assertTrue(restored.respondToToolApproval(approvalId, ToolApprovalState.Approved))
         val resumed = SessionAgentRun.open(restored, restored.state.value.currentMessages) { _, _ -> null }
         runAgent(
             resumed.bind(request(provider, restored.state.value.currentMessages).copy(tools = listOf(tool)), nodeId),
@@ -131,7 +148,11 @@ class SessionAgentRunTest {
         val provider = ScriptedProvider().apply { firstTool = true }
         val operation =
             ConversationOperation("test/report", "Report", PackageLease("test", "v1", 1), emptySet()) { _, _ ->
-                PreparedConversationOperation(emptyList(), execute = { OperationResult() })
+                PreparedConversationOperation(emptyList(), execute = {
+                    val owner = session.state.value.executionLedger().runs.values.single().state.ref
+                    SessionRunStore(session).addGate(owner, Gate("user", GateKind.USER_PAUSE))
+                    OperationResult()
+                })
             }
         val run = SessionAgentRun.open(session, initial.currentMessages) { point, _ ->
             if (point.cursor.boundary ==
@@ -148,7 +169,6 @@ class SessionAgentRunTest {
             run.hooks(hooks)
         ).collect(run::accept)
         assertNotNull(run.pending)
-        SessionRunStore(session).addGate(run.ref, Gate("user", GateKind.USER_PAUSE))
         SessionOperationDispatcher(listOf(operation)) { _, _ -> true }.execute(session, run.pending!!)
         run.operationFinished()
         val events = runAgent(
@@ -198,7 +218,10 @@ class SessionAgentRunTest {
         assertEquals(1, summaries)
         assertTrue(afterAdoption.state.value.executionLedger().runs.getValue(run.ref.runId).state.gates.isEmpty())
         runAgent(
-            recovered.bind(request(provider, afterAdoption.state.value.currentMessages).copy(tools = listOf(tool)), Uuid.random()),
+            recovered.bind(
+                request(provider, afterAdoption.state.value.currentMessages).copy(tools = listOf(tool)),
+                Uuid.random()
+            ),
             recovered.hooks(hooks)
         ).collect(recovered::accept)
         val final = store.persisted!!.executionLedger().runs.getValue(run.ref.runId)
@@ -222,14 +245,20 @@ class SessionAgentRunTest {
                     return message
                 }
             }
-            runAgent(run.bind(request(provider, initial.currentMessages), Uuid.random()), run.hooks(waitingHooks)).collect {
+            runAgent(
+                run.bind(request(provider, initial.currentMessages), Uuid.random()),
+                run.hooks(waitingHooks)
+            ).collect {
                 run.accept(it)
                 if (session.state.value.completedRunReply(run.ref) != null) completions++
             }
             assertEquals(0, completions)
             SessionRunStore(session).resolveGate(run.ref, "pause")
             val resumed = SessionAgentRun.open(session, session.state.value.currentMessages) { _, _ -> null }
-            runAgent(resumed.bind(request(provider, session.state.value.currentMessages), Uuid.random()), resumed.hooks(hooks)).collect {
+            runAgent(
+                resumed.bind(request(provider, session.state.value.currentMessages), Uuid.random()),
+                resumed.hooks(hooks)
+            ).collect {
                 resumed.accept(it)
                 if (it is AgentEvent.Finished && session.state.value.completedRunReply(run.ref) != null) completions++
             }

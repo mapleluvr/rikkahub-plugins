@@ -17,11 +17,25 @@ data class OperationRecord(
     val attemptId: String? = null,
     val result: OperationResult? = null,
     val modelAttempts: Int = 0,
-    val maxModelAttempts: Int = 8
+    val maxModelAttempts: Int = 8,
+    /** Recorded before permission returns to any external-effect handler. */
+    val effectAdmissions: Int = 0,
+    /** Null only on legacy receipts; display lineage is not an operation-result index. */
+    val adoptedMessageIds: List<String>? = null,
 )
 
 @Serializable
 data class ToolCallStamp(val id: String, val name: String, val input: String)
+
+/** A host-issued request for one human decision; scoped by its owning RunCheckpoint. */
+@Serializable
+data class ToolApprovalRequestRecord(
+    val id: String,
+    val messageId: String,
+    val call: ToolCallStamp,
+    val definition: String,
+    val decision: String? = null,
+)
 
 @Serializable
 data class RunCheckpoint(
@@ -38,6 +52,7 @@ data class RunCheckpoint(
     val featureFlags: Set<String> = emptySet(),
     val toolDefinitions: Map<String, String> = emptyMap(),
     val consumedToolPermits: Map<String, String> = emptyMap(),
+    val approvalRequests: Map<String, ToolApprovalRequestRecord> = emptyMap(),
 )
 
 /** One versioned host envelope. Unknown envelope versions must never execute. */

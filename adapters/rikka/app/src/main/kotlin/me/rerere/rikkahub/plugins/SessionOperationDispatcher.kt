@@ -24,7 +24,9 @@ data class PreparedConversationOperation(
     val sources: List<SourceStamp>,
     val execute: suspend (OperationContext) -> OperationResult,
     val validateAdoption: (Conversation) -> Unit = {},
-    val adopt: (Conversation, OperationResult) -> Conversation = { conversation, _ -> conversation }
+    val adopt: (Conversation, OperationResult) -> Conversation = { conversation, _ -> conversation },
+    /** Display ownership may be narrower than the full versioned command input. */
+    val displaySourceIds: List<String> = sources.map { it.id },
 )
 
 data class ConversationOperation(
@@ -41,6 +43,7 @@ sealed interface OperationDispatch {
     data class Rejected(val error: Throwable) : OperationDispatch
     data class NeedsReconciliation(val error: Throwable) : OperationDispatch
     data class StorageBlocked(val error: Throwable) : OperationDispatch
+    data object Waiting : OperationDispatch
 }
 
 /** One immutable registry snapshot. Feature policy, model prompts and artifact formats stay outside it. */
@@ -76,21 +79,29 @@ class SessionOperationDispatcher(
         val prior = session.state.value.executionLedger().operations[call.id]
         if (prior != null && prior.call != call) {
             OperationDispatch.NeedsReconciliation(error)
-        } else when (prior?.status) {
-            AttemptStatus.RUNNING, AttemptStatus.UNKNOWN -> OperationDispatch.NeedsReconciliation(error)
-            AttemptStatus.CANCELLED -> OperationDispatch.Rejected(error)
-            // A valid settled receipt returns from execute. An exception here failed current admission.
-            AttemptStatus.SETTLED -> OperationDispatch.NeedsReconciliation(error)
-            else -> {
-                try {
-                    val store = SessionOperationStore(session)
-                    if (prior == null) store.prepare(call, emptyList())
-                    store.cancel(call.id)
-                    OperationDispatch.Rejected(error)
-                } catch (storage: Exception) {
-                    currentCoroutineContext().ensureActive()
-                    storage.addSuppressed(error)
-                    OperationDispatch.StorageBlocked(storage)
+        } else if (error is OperationWaiting &&
+            (prior == null || prior.status == AttemptStatus.PREPARED)) {
+            OperationDispatch.Waiting
+        } else {
+            when (prior?.status) {
+                AttemptStatus.RUNNING, AttemptStatus.UNKNOWN -> OperationDispatch.NeedsReconciliation(error)
+
+                AttemptStatus.CANCELLED -> OperationDispatch.Rejected(error)
+
+                // A valid settled receipt returns from execute. An exception here failed current admission.
+                AttemptStatus.SETTLED -> OperationDispatch.NeedsReconciliation(error)
+
+                else -> {
+                    try {
+                        val store = SessionOperationStore(session)
+                        if (prior == null) store.prepare(call, emptyList())
+                        store.cancel(call.id)
+                        OperationDispatch.Rejected(error)
+                    } catch (storage: Exception) {
+                        currentCoroutineContext().ensureActive()
+                        storage.addSuppressed(error)
+                        OperationDispatch.StorageBlocked(storage)
+                    }
                 }
             }
         }
@@ -102,8 +113,12 @@ class SessionOperationDispatcher(
         timeoutMillis: Long = 120_000,
     ): OperationResult {
         val definition = requireNotNull(registry[call.type to call.handler]) { "Operation version is unavailable" }
-        check(authorized(call.handler, definition.capabilities) &&
-            (call.caller?.let { authorized(it, definition.capabilities) } != false)) { "Operation is disabled or unauthorized" }
+        check(
+            authorized(call.handler, definition.capabilities) &&
+                (call.caller?.let {
+                    authorized(it, definition.capabilities)
+                } != false)
+        ) { "Operation is disabled or unauthorized" }
         val snapshot = session.state.value
         require(call.target.conversationId == snapshot.id.toString())
         snapshot.executionLedger().operations[call.id]?.let { prior ->
@@ -114,9 +129,12 @@ class SessionOperationDispatcher(
             }
             check(prior.status == AttemptStatus.PREPARED) { "Previous attempt needs reconciliation" }
         }
+        snapshot.requireOperationEffectAllowed(call)
         require(call.frame.isNotEmpty() || snapshot.messageNodes.isEmpty()) { "Operation has no bound input frame" }
         val bound = snapshot.forOperationFrame(call.frame)
         val prepared = definition.prepare(bound, call.input)
+        require(prepared.displaySourceIds.distinct().size == prepared.displaySourceIds.size &&
+            call.frame.map { it.id }.containsAll(prepared.displaySourceIds)) { "Invalid display source path" }
         val store = SessionOperationStore(session)
         val record = store.prepare(call, prepared.sources)
         if (record.status == AttemptStatus.SETTLED) return checkNotNull(record.result)
@@ -133,35 +151,57 @@ class SessionOperationDispatcher(
                 prepared.execute
             )))
             fun validate(current: Conversation) {
-                check(authorized(call.handler, definition.capabilities) &&
-                    (call.caller?.let { authorized(it, definition.capabilities) } != false)) { "Operation authorization was revoked" }
+                check(
+                    authorized(call.handler, definition.capabilities) &&
+                        (call.caller?.let {
+                            authorized(it, definition.capabilities)
+                        } != false)
+                ) { "Operation authorization was revoked" }
                 call.run?.let { ref ->
-                    val run = requireNotNull(current.executionLedger().runs[ref.runId]) { "Owning run is missing" }
-                    check(run.state.ref == ref && run.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE) {
-                        "Owning run ended or changed"
-                    }
+                    val run = current.executionLedger().runs[ref.runId]
+                    requireOperationAdmission(run?.state?.ref == ref &&
+                        run.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE, "Owning run ended or changed")
                 }
                 val view = current.forOperationFrame(call.frame)
                 val sources = view.pluginSources().associateBy { it.id }
                 check(prepared.sources.all { sources[it.id] == it }) { "Operation source changed" }
                 prepared.validateAdoption(view)
             }
-            val result = runner.execute(call, definition.capabilities, attempt, timeoutMillis,
-                chargeModelAttempt = { store.chargeModelAttempt(call, ::validate) },
+            val result = runner.execute(
+                call,
+                definition.capabilities,
+                attempt,
+                timeoutMillis,
+                chargeModelAttempt = {
+                    store.chargeModelAttempt(call, ::validate)
+                    validate(session.state.value)
+                    session.state.value.requireOperationEffectAllowed(call)
+                },
+                admitEffect = {
+                    store.admitEffect(call, ::validate)
+                    validate(session.state.value)
+                    session.state.value.requireOperationEffectAllowed(call)
+                },
             ) {
                 validate(session.state.value)
             }
             currentCoroutineContext().ensureActive()
-            store.settle(call, attempt, result) { current ->
+            store.settle(call, attempt, result, prepared.displaySourceIds) { current ->
                 validate(current)
-                current.forOperationFrame(call.frame).validateOperationOutput(result, prepared.sources, definition.capabilities)
+                current.forOperationFrame(
+                    call.frame
+                ).validateOperationOutput(result, prepared.sources, definition.capabilities)
                 prepared.adopt(current.forOperationFrame(call.frame, includeTail = true), result)
                     .restoreBrowsingSelection(current)
             }
             return result
         } catch (error: Throwable) {
             withContext(NonCancellable) {
-                runCatching { store.cancel(call.id) }.exceptionOrNull()?.let(error::addSuppressed)
+                runCatching {
+                    if (error is OperationAdmissionDenied) {
+                        store.refusedBeforeEffect(call.id, error is OperationWaiting)
+                    } else store.cancel(call.id)
+                }.exceptionOrNull()?.let(error::addSuppressed)
             }
             throw error
         }
@@ -182,6 +222,8 @@ fun Conversation.operationCall(
     definition.lease,
     caller,
     run,
-    frame = (run?.let { executionLedger().runs[it.runId]?.let { saved -> forInputPath(saved.inputIds).currentMessages } }
+    frame = (run?.let {
+        executionLedger().runs[it.runId]?.let { saved -> forInputPath(saved.inputIds).currentMessages }
+    }
         ?: currentMessages).map { it.sourceStamp() },
 )

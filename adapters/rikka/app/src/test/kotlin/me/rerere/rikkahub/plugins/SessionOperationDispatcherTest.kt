@@ -226,10 +226,11 @@ class SessionOperationDispatcherTest {
         val store = FakeConversationStore(source)
         val session = session(source, store)
         var preparations = 0
-        val operation = ConversationOperation("reject", "reject", PackageLease("test", "v1", 1), emptySet(), true) { _, _ ->
-            preparations++
-            error("unchanged invalid input")
-        }
+        val operation =
+            ConversationOperation("reject", "reject", PackageLease("test", "v1", 1), emptySet(), true) { _, _ ->
+                preparations++
+                error("unchanged invalid input")
+            }
         val dispatcher = SessionOperationDispatcher(listOf(operation)) { _, _ -> true }
         val call = source.operationCall(operation, JsonNull)
         repeat(3) {
@@ -255,7 +256,10 @@ class SessionOperationDispatcherTest {
         SessionRunStore(session).update(run.ref) { it.copy(state = it.state.copy(maxAttempts = 2)) }
         var dispatched = 0
         val feature = BuiltinContextFeature { _, _, _, beforeDispatch ->
-            repeat(3) { beforeDispatch(); dispatched++ }
+            repeat(3) {
+                beforeDispatch()
+                dispatched++
+            }
             "should not settle"
         }
         val call = session.state.value.operationCall(feature.operation, feature.input(), run = run.ref)
@@ -271,16 +275,22 @@ class SessionOperationDispatcherTest {
         val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
         val session = session(source, FakeConversationStore(source))
         var allowed = true
-        val operation = ConversationOperation("report", "report", PackageLease("test", "v1", 1), emptySet()) { snapshot, _ ->
-            PreparedConversationOperation(snapshot.pluginSources(), { OperationResult() })
-        }
+        val operation =
+            ConversationOperation("report", "report", PackageLease("test", "v1", 1), emptySet()) { snapshot, _ ->
+                PreparedConversationOperation(snapshot.pluginSources(), { OperationResult() })
+            }
         val dispatcher = SessionOperationDispatcher(listOf(operation)) { _, _ -> allowed }
         val call = source.operationCall(operation, JsonNull)
         assertTrue(dispatcher.dispatch(session, call) is OperationDispatch.Settled)
         allowed = false
         assertTrue(dispatcher.dispatch(session, call) is OperationDispatch.NeedsReconciliation)
         allowed = true
-        assertTrue(dispatcher.dispatch(session, call.copy(input = JsonPrimitive("different"))) is OperationDispatch.NeedsReconciliation)
+        assertTrue(
+            dispatcher.dispatch(
+                session,
+                call.copy(input = JsonPrimitive("different"))
+            ) is OperationDispatch.NeedsReconciliation
+        )
         assertEquals(call, session.state.value.executionLedger().operations.getValue(call.id).call)
     }
 

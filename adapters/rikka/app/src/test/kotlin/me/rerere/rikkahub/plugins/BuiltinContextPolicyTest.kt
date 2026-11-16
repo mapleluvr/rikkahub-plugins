@@ -81,9 +81,17 @@ class BuiltinContextPolicyTest {
         val session = ConversationSession(source.id, source, this, store, {}).also { it.initialize({ source }) }
         val run = SessionAgentRun.open(session, source.currentMessages) { _, _ -> null }
         assertNull(feature.boundaryDecision(session, run.ref, boundary(), settings, model, true, true))
-        val reopened = ConversationSession(source.id, source, this, store, {}).also { it.initialize({ store.persisted }) }
-        assertNull(feature.boundaryDecision(reopened, run.ref,
-            boundary().copy(message = reply.copy(stepCount = 2)), settings, model, true, false))
+        val reopened = ConversationSession(source.id, source, this, store, {
+        }).also { it.initialize({ store.persisted }) }
+        assertNull(feature.boundaryDecision(
+            reopened,
+            run.ref,
+            boundary().copy(message = reply.copy(stepCount = 2)),
+            settings,
+            model,
+            true,
+            false
+        ))
         assertEquals(1, reopened.state.value.executionLedger().runs.getValue(run.ref.runId).featureFlags.size)
     }
 

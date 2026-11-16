@@ -82,8 +82,13 @@ class RoomExecutionRecoveryTest {
             val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
             repo.insertConversation(source)
             val session = open(source.id, repo)
-            val call = OperationCall("index", "report", BranchRef(source.id.toString(), "branch"),
-                JsonNull, PackageLease("test", "v1", 1))
+            val call = OperationCall(
+                "index",
+                "report",
+                BranchRef(source.id.toString(), "branch"),
+                JsonNull,
+                PackageLease("test", "v1", 1)
+            )
             val operations = SessionOperationStore(session)
             operations.prepare(call, source.pluginSources())
             operations.start(call.id, "attempt")

@@ -196,6 +196,34 @@
     {
       "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ToolApprovalBindingTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ToolApprovalBindingTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/SessionToolApproval.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/SessionToolApproval.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ToolResourceBinding.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ToolResourceBinding.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/OperationAdmission.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/OperationAdmission.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ApprovalLifecycleTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ApprovalLifecycleTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ToolResourceBindingTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ToolResourceBindingTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ReviewRecoveryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/ReviewRecoveryTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/SettledOperationServiceRecoveryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/SettledOperationServiceRecoveryTest.kt"
     }
   ]
 }
