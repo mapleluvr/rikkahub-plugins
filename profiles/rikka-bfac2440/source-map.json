@@ -80,6 +80,34 @@
     {
       "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/PluginDraftSessionTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/PluginDraftSessionTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginDatabaseContractTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginDatabaseContractTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginMigrationTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginMigrationTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/SessionOperationStore.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/SessionOperationStore.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionOperationStoreTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionOperationStoreTest.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/OperationLedger.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/OperationLedger.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/OperationLedgerTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/OperationLedgerTest.kt"
+    },
+    {
+      "from": "platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/Checkpoint.kt",
+      "to": "vendor/rikka-plugin-host/platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/Checkpoint.kt"
     }
   ]
 }
