@@ -1,4 +1,4 @@
-From 6b658016dd76c74bad50515148946a5fd7e46bb1 Mon Sep 17 00:00:00 2001
+From 11b7473c47ad627deffc53b0b1a93e20b78eb5b5 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 03:09:25 +0800
 Subject: [PATCH] Add generic agent boundaries and provider admission for each
@@ -6,22 +6,24 @@ Subject: [PATCH] Add generic agent boundaries and provider admission for each
 
 Patch-Id: agent-control
 ---
- ai/build.gradle.kts                           |  1 +
+ ai/build.gradle.kts                           |  3 +
  ai/src/main/java/me/rerere/ai/agent/Agent.kt  | 34 +++++++++-
- .../main/java/me/rerere/ai/agent/AgentLoop.kt | 63 ++++++++++++++++---
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt | 64 +++++++++++++++++--
  .../me/rerere/rikkahub/service/ChatService.kt |  2 +
  settings.gradle.kts                           |  4 ++
- 5 files changed, 96 insertions(+), 8 deletions(-)
+ 5 files changed, 99 insertions(+), 8 deletions(-)
 
 diff --git a/ai/build.gradle.kts b/ai/build.gradle.kts
-index b9e390e7ced626aaf9d891c271dc2605d991f14c..9ad5c3e85d2ab7d231d406027d423456cbc4e68c 100644
+index b9e390e7ced626aaf9d891c271dc2605d991f14c..a97cdcec3fda36cfa24f2fe5e25a013b058e0ed7 100644
 --- a/ai/build.gradle.kts
 +++ b/ai/build.gradle.kts
-@@ -7,6 +7,7 @@ plugins {
+@@ -7,6 +7,9 @@ plugins {
  
  android {
      namespace = "me.rerere.ai"
-+    sourceSets.getByName("test").kotlin.directories.add("../vendor/rikka-plugin-host/adapters/rikka/ai/src/test/kotlin")
++    sourceSets {
++        getByName("test").kotlin.directories.add("../vendor/rikka-plugin-host/adapters/rikka/ai/src/test/kotlin")
++    }
  
      buildFeatures {
          // 请求体日志只在调试构建里打印，靠 BuildConfig.DEBUG 判断
@@ -93,7 +95,7 @@ index cc27f8de6ccdf8725354d8ccbed6c8eba738ba3a..2e0d71feb4929daee24b41ab60c5afd0
      AgentLoop(request, hooks, this).run()
  }
 diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
-index 30d05ef544bd91c7bdb07d2ac629340e341978d4..73f0eb16aa6ce76327012506b867717997c9411b 100644
+index 30d05ef544bd91c7bdb07d2ac629340e341978d4..32fe78d2a9c0ab0b4a068fb622a722d1430f2879 100644
 --- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
 +++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
 @@ -24,6 +24,7 @@ import kotlin.time.TimeSource
@@ -112,7 +114,7 @@ index 30d05ef544bd91c7bdb07d2ac629340e341978d4..73f0eb16aa6ce76327012506b8677179
  
      init {
          val last = request.messages.lastOrNull()
-@@ -47,23 +49,65 @@ internal class AgentLoop(
+@@ -47,23 +49,66 @@ internal class AgentLoop(
      }
  
      suspend fun run() {
@@ -125,6 +127,7 @@ index 30d05ef544bd91c7bdb07d2ac629340e341978d4..73f0eb16aa6ce76327012506b8677179
 +    }
 +
 +    private suspend fun runSegment() {
++        if (request.resumeCursor?.boundary == AgentBoundary.AfterTools) boundary(AgentBoundary.AfterTools)
 +        var generatedHere = false
          while (true) {
              val current = message
@@ -184,7 +187,7 @@ index 30d05ef544bd91c7bdb07d2ac629340e341978d4..73f0eb16aa6ce76327012506b8677179
          }
      }
  
-@@ -122,8 +166,10 @@ internal class AgentLoop(
+@@ -122,8 +167,10 @@ internal class AgentLoop(
          // 多轮工具调用共用同一条助手消息，消息上已有的 usage 和耗时来自之前的步骤。
          // 本步从清空的统计开始（merge 只适合同一次请求内的快照），再与之前的步骤累加。
          val stepStart = base.copy(usage = null, generationTimeMs = null)
@@ -195,7 +198,7 @@ index 30d05ef544bd91c7bdb07d2ac629340e341978d4..73f0eb16aa6ce76327012506b8677179
                  // 每次重试都从本步开始时的消息重新合并，不会把重试的响应接在已经展示的半截回复后面；
                  // 各次尝试共用同一个消息 id，调用方直接覆盖即可。
                  val handler = StreamChunkHandler(params.model)
-@@ -155,7 +201,9 @@ internal class AgentLoop(
+@@ -155,7 +202,9 @@ internal class AgentLoop(
      ): UIMessage {
          // 非流式拿不到首 token 时间，只能统计最后一次尝试的整个请求耗时
          var requestMark = TimeSource.Monotonic.markNow()
@@ -205,7 +208,7 @@ index 30d05ef544bd91c7bdb07d2ac629340e341978d4..73f0eb16aa6ce76327012506b8677179
              requestMark = TimeSource.Monotonic.markNow()
              request.provider.generateText(request.providerSetting, messages, params)
          }
-@@ -176,6 +224,7 @@ internal class AgentLoop(
+@@ -176,6 +225,7 @@ internal class AgentLoop(
      private suspend fun executeTools() {
          val tools = checkNotNull(message).getTools().filter { !it.isExecuted }
          for (tool in tools) {
@@ -213,7 +216,7 @@ index 30d05ef544bd91c7bdb07d2ac629340e341978d4..73f0eb16aa6ce76327012506b8677179
              // 只给真正运行的工具计时；开始时先写一次，界面才能在执行中实时显示耗时
              val runs = tool.approvalState == ToolApprovalState.Auto || tool.approvalState == ToolApprovalState.Approved
              if (runs) updateTool(tool.toolCallId) { it.copy(startedAt = Clock.System.now(), finishedAt = null) }
-@@ -233,7 +282,7 @@ internal class AgentLoop(
+@@ -233,7 +283,7 @@ internal class AgentLoop(
      }
  
      private suspend fun finish(reason: AgentFinishReason) {

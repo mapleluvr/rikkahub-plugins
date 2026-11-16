@@ -4,7 +4,7 @@
     {
       "id": "optional-firebase",
       "file": "patches/rikka-bfac2440/0001-optional-firebase.patch",
-      "sha256": "ffa02570f87d8ac8cdfdb27607b4c3fb3745f2b084f7d4facd96a3d7a1e522f2",
+      "sha256": "613bc6950dd2f29eb2b369556c227be4884daabde76c12cf166105177be60f23",
       "paths": [
         "app/build.gradle.kts",
         "app/src/main/java/me/rerere/rikkahub/di/AppModule.kt",
@@ -15,7 +15,7 @@
     {
       "id": "plugin-build",
       "file": "patches/rikka-bfac2440/0002-plugin-build.patch",
-      "sha256": "2816d89dddf84349ca3c2a969c3c6f3c471ac062e1515a4d98e90d476f9d9365",
+      "sha256": "826d771b4d42b6366b9649accc2f7ac1969a687f5f65b62f92f6b6396197d32d",
       "paths": [
         ".gitignore",
         "settings.gradle.kts"
@@ -24,7 +24,7 @@
     {
       "id": "agent-control",
       "file": "patches/rikka-bfac2440/0003-agent-control.patch",
-      "sha256": "d28cc72fd3c24453d1177dd2429b7df448d620657983d112561965fdd4ce3ffb",
+      "sha256": "2d6ee042d0e5209cbad4366e5c2139baddc24c4856bb4014e75dfe0c3cdcd91a",
       "paths": [
         "ai/build.gradle.kts",
         "ai/src/main/java/me/rerere/ai/agent/Agent.kt",

@@ -181,6 +181,30 @@ class AgentControlContractTest {
         assertEquals(1, provider.calls)
     }
 
+    @Test
+    fun afterToolsWaitIsRecheckedBeforePreparingAnotherRequest() = runTest {
+        val tool = UIMessagePart.Tool(
+            toolCallId = "one", toolName = "one", input = "{}",
+            output = listOf(UIMessagePart.Text("settled"))
+        )
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))
+        val visited = mutableListOf<AgentBoundary>()
+        val control = object : AgentControl {
+            override suspend fun decide(context: AgentBoundaryContext): AgentDecision {
+                visited += context.cursor.boundary
+                return AgentDecision.Yield("still-waiting")
+            }
+        }
+        val result = runAgent(request(control).copy(
+            messages = listOf(UIMessage.user("go"), message),
+            completedSteps = 1,
+            resumeCursor = AgentCursor(AgentBoundary.AfterTools, 1)
+        ), hooks).toList().last() as AgentEvent.Yielded
+        assertEquals(listOf(AgentBoundary.AfterTools), visited)
+        assertEquals(AgentBoundary.AfterTools, result.cursor.boundary)
+        assertEquals(0, provider.calls)
+    }
+
     private class ScriptedProvider : Provider<ProviderSetting> {
         var calls = 0
         var fail = false
