@@ -160,6 +160,38 @@ class SessionAgentRunTest {
         assertEquals(setOf("user"), store.persisted!!.executionLedger().runs.getValue(run.ref.runId).state.gates.keys)
     }
 
+    @Test
+    fun operationWaitAndSettledAdoptionRecoverWithoutResettingRunOrRepeatingWork() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("start")))
+        val store = FakeConversationStore(initial)
+        val session = open(initial, store)
+        var summaries = 0
+        val feature = me.rerere.rikkahub.plugins.builtin.BuiltinContextFeature { _, _, _, _ -> summaries++; "summary" }
+        val provider = ScriptedProvider().apply { firstTool = true }
+        val run = SessionAgentRun.open(session, initial.currentMessages) { point, _ ->
+            if (point.cursor.boundary == AgentBoundary.AfterTools) BoundaryOperation(feature.operation, feature.input(), "operation") else null
+        }
+        val tool = Tool(name = "effect", description = "effect", execute = { listOf(UIMessagePart.Text("done")) })
+        runAgent(run.bind(request(provider, initial.currentMessages).copy(tools = listOf(tool)), Uuid.random()), run.hooks(hooks)).collect(run::accept)
+        val restored = open(initial, store)
+        val pending = SessionAgentRun.open(restored, restored.state.value.currentMessages) { _, _ -> null }
+        assertEquals(run.ref, pending.ref)
+        assertEquals(run.pending, pending.pending)
+        assertNotNull(pending.pending)
+        SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }.execute(restored, pending.pending!!)
+        // Simulate process death after adopting the summary but before clearing the dependency gate.
+        val afterAdoption = open(initial, store)
+        val recovered = SessionAgentRun.open(afterAdoption, afterAdoption.state.value.currentMessages) { _, _ -> null }
+        assertEquals(run.ref, recovered.ref)
+        assertNull(recovered.pending)
+        assertEquals(1, summaries)
+        assertTrue(afterAdoption.state.value.executionLedger().runs.getValue(run.ref.runId).state.gates.isEmpty())
+        runAgent(recovered.bind(request(provider, afterAdoption.state.value.currentMessages), Uuid.random()), recovered.hooks(hooks)).collect(recovered::accept)
+        val final = store.persisted!!.executionLedger().runs.getValue(run.ref.runId)
+        assertEquals(2, final.state.stepsUsed)
+        assertEquals(2, provider.calls)
+    }
+
     private suspend fun CoroutineScope.open(initial: Conversation, store: FakeConversationStore) =
         ConversationSession(initial.id, initial, this, store, {}).also { it.initialize({ store.persisted }) }
 

@@ -28,7 +28,8 @@ data class RunCheckpoint(
     val nextStep: Int,
     val toolCallId: String? = null,
     val messageId: String? = null,
-    val toolBatch: List<ToolCallStamp> = emptyList()
+    val toolBatch: List<ToolCallStamp> = emptyList(),
+    val pendingOperation: OperationCall? = null,
 )
 
 /** One versioned host envelope. Unknown envelope versions must never execute. */

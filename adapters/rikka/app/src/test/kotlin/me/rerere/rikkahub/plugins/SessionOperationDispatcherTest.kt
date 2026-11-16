@@ -155,6 +155,38 @@ class SessionOperationDispatcherTest {
         assertEquals(0, requests)
     }
 
+    @Test
+    fun staleIdleCommandCannotRetargetAnotherSelectedBranch() = runBlocking {
+        val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
+        val store = FakeConversationStore(source)
+        val session = session(source, store)
+        var calls = 0
+        val feature = BuiltinContextFeature { _, _, _, _ -> calls++; "summary" }
+        val call = source.operationCall(feature.operation, feature.input())
+        session.update { it.copy(messageNodes = emptyList()).updateCurrentMessages(listOf(UIMessage.user("other branch"))) }
+        assertTrue(runCatching { SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }.execute(session, call) }.isFailure)
+        assertEquals(0, calls)
+    }
+
+    @Test
+    fun tailAppendDuringSummaryKeepsTailAndAdoptsOnlyOriginalPrefix() = runBlocking {
+        val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
+        val store = FakeConversationStore(source)
+        val session = session(source, store)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val feature = BuiltinContextFeature { _, _, _, _ -> entered.complete(Unit); release.await(); "summary" }
+        val call = source.operationCall(feature.operation, feature.input())
+        val work = async { SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }.execute(session, call) }
+        entered.await()
+        val tail = UIMessage.user("tail")
+        session.update { it.updateCurrentMessages(it.currentMessages + tail) }
+        release.complete(Unit)
+        work.await()
+        assertEquals(tail, store.persisted!!.currentMessages.last())
+        assertTrue(store.persisted!!.currentMessages[1].isContextCheckpoint)
+    }
+
     private suspend fun CoroutineScope.session(source: Conversation, store: FakeConversationStore) =
         ConversationSession(source.id, source, this, store, {}).also { it.initialize({ store.persisted }) }
 }

@@ -40,7 +40,7 @@ class BuiltinContextFeature(
     private val summarize: suspend (Conversation, List<UIMessage>, String, suspend () -> Unit) -> String,
 ) {
     val operation =
-        ConversationOperation(ID, "压缩上下文", LEASE, setOf("context.write", "model.request")) { source, input ->
+        ConversationOperation(ID, "压缩上下文", LEASE, setOf("context.write", "model.request"), continueRunAfterFailure = true) { source, input ->
             prepare(source, JsonInstant.decodeFromJsonElement<CompactInput>(input))
         }
 

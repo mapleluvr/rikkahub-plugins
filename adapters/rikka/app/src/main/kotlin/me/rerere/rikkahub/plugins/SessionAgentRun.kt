@@ -55,7 +55,12 @@ class SessionAgentRun private constructor(
                             operation.commandId,
                             ref
                         )
-                    store.addGate(ref, Gate(operation.commandId, GateKind.OPERATION_DEPENDENCY))
+                    store.update(ref) {
+                        it.copy(
+                            state = RunControl.addGate(it.state, Gate(operation.commandId, GateKind.OPERATION_DEPENDENCY)),
+                            pendingOperation = pending,
+                        )
+                    }
                     return AgentDecision.Yield(operation.commandId)
                 }
                 preparedFrame = snapshot().state.frameRevision
@@ -137,17 +142,19 @@ class SessionAgentRun private constructor(
 
     suspend fun operationFinished() {
         val call = checkNotNull(pending)
+        val sameReply = session.state.value.currentMessages.lastOrNull()?.id?.toString() == cursor?.messageId
         store.update(ref) {
             it.copy(
                 state = RunControl.resolveGate(it.state, call.id),
-                boundary = AgentBoundary.BeforeModel.name,
-                messageId = null,
-                toolBatch = emptyList(),
-                toolCallId = null
+                pendingOperation = null,
+                boundary = if (sameReply) it.boundary else AgentBoundary.BeforeModel.name,
+                messageId = if (sameReply) it.messageId else null,
+                toolBatch = if (sameReply) it.toolBatch else emptyList(),
+                toolCallId = if (sameReply) it.toolCallId else null,
             )
         }
         pending = null
-        cursor = null
+        if (!sameReply) cursor = null
     }
 
     suspend fun cancel() = store.cancel(ref)
@@ -173,12 +180,12 @@ class SessionAgentRun private constructor(
             policy: (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
         ): SessionAgentRun {
             val last = history.lastOrNull()
-            val branch = history.lastOrNull { it.role == MessageRole.USER }?.id?.toString() ?: "draft"
+            val branch = history.lastOrNull { it.role == MessageRole.USER && !it.isContextCheckpoint }?.id?.toString() ?: "draft"
             val ledger = session.state.value.executionLedger()
             val previous = ledger.runs.values.singleOrNull {
                 it.state.status == RunStatus.ACTIVE && (
                     (it.messageId != null && it.messageId == last?.id?.toString()) ||
-                    (it.messageId == null && it.state.ref.branchId == branch)
+                    ((it.messageId == null || it.pendingOperation != null) && it.state.ref.branchId == branch)
                 )
             }
             val store = SessionRunStore(session)
@@ -204,6 +211,7 @@ class SessionAgentRun private constructor(
             }
             return SessionAgentRun(session, saved.state.ref, policy).also { controller ->
                 if (previous != null) {
+                    controller.pending = saved.pendingOperation
                     controller.cursor = AgentCursor(
                         AgentBoundary.valueOf(saved.boundary),
                         saved.nextStep,
@@ -216,6 +224,9 @@ class SessionAgentRun private constructor(
                     if (saved.state.stepsUsed > saved.nextStep ||
                         last?.getTools().orEmpty().any { !it.isExecuted && it.startedAt != null }) {
                         store.addGate(saved.state.ref, Gate("host.recovery", GateKind.PLUGIN_FAULT))
+                    }
+                    saved.pendingOperation?.let { call ->
+                        if (ledger.operations[call.id]?.status == AttemptStatus.SETTLED) controller.operationFinished()
                     }
                 }
             }

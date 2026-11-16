@@ -32,6 +32,7 @@ data class ConversationOperation(
     val title: String,
     val lease: PackageLease,
     val capabilities: Set<String>,
+    val continueRunAfterFailure: Boolean = false,
     val prepare: (Conversation, JsonElement) -> PreparedConversationOperation
 )
 
@@ -47,6 +48,9 @@ class SessionOperationDispatcher(
     }
 
     fun label(call: OperationCall): String = registry[call.type to call.handler]?.title ?: call.type
+
+    fun continueRunAfterFailure(call: OperationCall): Boolean =
+        registry[call.type to call.handler]?.continueRunAfterFailure == true
 
     suspend fun execute(
         session: ConversationSession,
@@ -64,6 +68,10 @@ class SessionOperationDispatcher(
                 return checkNotNull(prior.result)
             }
             check(prior.status == AttemptStatus.PREPARED) { "Previous attempt needs reconciliation" }
+        }
+        val selectedIds = snapshot.currentMessages.map { it.id.toString() }
+        if (call.run == null) {
+            require(call.target.branchId == selectedIds.joinToString("/")) { "Operation target branch changed" }
         }
         val prepared = definition.prepare(snapshot, call.input)
         val store = SessionOperationStore(session)
@@ -88,6 +96,9 @@ class SessionOperationDispatcher(
                     check(run.state.ref == ref && run.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE) {
                         "Owning run ended or changed"
                     }
+                }
+                check(current.currentMessages.take(selectedIds.size).map { it.id.toString() } == selectedIds) {
+                    "Operation source branch changed"
                 }
                 val sources = current.pluginSources().associateBy { it.id }
                 check(prepared.sources.all { sources[it.id] == it }) { "Operation source changed" }
