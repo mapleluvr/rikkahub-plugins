@@ -1,4 +1,13 @@
 {
   "schemaVersion": 1,
-  "imports": []
+  "imports": [
+    {
+      "from": "platform/runtime-quickjs/build.gradle.kts",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/build.gradle.kts"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/contractTest/kotlin/dev/rikkahub/plugins/runtime/QuickJsContractTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/contractTest/kotlin/dev/rikkahub/plugins/runtime/QuickJsContractTest.kt"
+    }
+  ]
 }
