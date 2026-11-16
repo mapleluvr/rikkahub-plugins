@@ -1,0 +1,1102 @@
+From 10c715490ba412b4adf8e4f779a8a86f6ed1e766 Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 06:33:38 +0800
+Subject: [PATCH] fix(host): serialize recovery, side-effect admission and
+ completion publication
+
+Patch-Id: confirmed-execution-recovery
+---
+ ai/src/main/java/me/rerere/ai/agent/Agent.kt  |  17 ++-
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt |  84 +++++++---
+ ai/src/main/java/me/rerere/ai/core/Tool.kt    |   2 +
+ .../java/me/rerere/rikkahub/RouteActivity.kt  |   1 +
+ .../me/rerere/rikkahub/data/event/AppEvent.kt |   3 +
+ .../rikkahub/data/model/Conversation.kt       |   5 +-
+ .../rikkahub/data/model/ConversationFork.kt   |   8 +-
+ .../data/model/ConversationMessages.kt        |  11 +-
+ .../data/repository/ConversationRepository.kt |  11 +-
+ .../service/ChatNotificationManager.kt        |   1 +
+ .../me/rerere/rikkahub/service/ChatService.kt | 143 +++++++++++-------
+ .../rikkahub/service/ConversationSession.kt   |  81 ++++++----
+ .../rerere/rikkahub/ui/pages/chat/ChatList.kt |  20 +--
+ .../rikkahub/ui/pages/chat/ChatListPreview.kt |   2 +-
+ .../rerere/rikkahub/ui/pages/chat/ChatPage.kt |  12 +-
+ .../rerere/rikkahub/ui/pages/chat/ChatVM.kt   |   2 +-
+ .../rikkahub/ui/pages/chat/TTSAutoPlay.kt     |   8 +-
+ .../service/ConversationSessionManagerTest.kt |   2 +-
+ 18 files changed, 275 insertions(+), 138 deletions(-)
+
+diff --git a/ai/src/main/java/me/rerere/ai/agent/Agent.kt b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+index 3b67dbbace4aebdcd9e8a22144ed6077cd33a7d0..35fa4e16f5e7b88c849a522754a4020186ad47b8 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/Agent.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+@@ -48,6 +48,7 @@ data class AgentBoundaryContext(val cursor: AgentCursor, val message: UIMessage?
+ sealed interface AgentDecision {
+     data object Proceed : AgentDecision
+     data class Yield(val token: String) : AgentDecision
++
+     /** Legal only at BeforeComplete; the notice supplies the next step with new input. */
+     data class Continue(val notice: UIMessagePart.Notice) : AgentDecision
+ }
+@@ -61,6 +62,18 @@ interface AgentControl {
+     /** Persist authoritative state before tool effects or subsequent requests. Never receives stream previews. */
+     suspend fun commit(message: UIMessage) {}
+ 
++    /** Persist output and its next position together; a rejection leaves the output uncommitted and yields. */
++    suspend fun checkpoint(message: UIMessage, cursor: AgentCursor): String? {
++        commit(message)
++        return null
++    }
++
++    /** A persisted unknown effect must wait before executable-cursor validation. */
++    fun resumeBlock(): String? = null
++
++    /** Recheck after the durable start marker, immediately before invoking a tool. */
++    fun admitTool(message: UIMessage, tool: UIMessagePart.Tool): String? = null
++
+     /** Trusted synchronous admission, repeated immediately before every Provider attempt. */
+     fun admitModel(step: Int, attempt: Int): String? = null
+ 
+@@ -155,6 +168,8 @@ sealed interface AgentFinishReason {
+ fun runAgent(request: AgentRequest, hooks: AgentHooks): Flow<AgentEvent> = flow {
+     require(request.maxSteps > 0) { "maxSteps must be positive" }
+     require(request.completedSteps in 0..request.maxSteps) { "Invalid completed step count" }
+-    require(request.resumeCursor == null || request.resumeCursor.nextStep == request.completedSteps) { "Resume cursor and budget disagree" }
++    require(
++        request.resumeCursor == null || request.resumeCursor.nextStep == request.completedSteps
++    ) { "Resume cursor and budget disagree" }
+     AgentLoop(request, hooks, this).run()
+ }
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index 909bd8ccb64a00e9277ec83c068bad593381bc50..2c35f3db32193b08a72f2933b7aff486e360c223 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -1,7 +1,7 @@
+ package me.rerere.ai.agent
+ 
+-import kotlinx.coroutines.ensureActive
+ import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.ensureActive
+ import kotlinx.coroutines.flow.FlowCollector
+ import kotlinx.datetime.TimeZone
+ import kotlinx.datetime.toLocalDateTime
+@@ -61,10 +61,15 @@ internal class AgentLoop(
+     }
+ 
+     private suspend fun runSegment() {
+-        request.resumeCursor?.let(::validateResume)
++        request.resumeCursor?.let { saved ->
++            request.control.resumeBlock()?.let { throw AgentYield(saved, it) }
++            validateResume(saved)
++        }
+         var phase = request.resumeCursor?.boundary ?: if (hasUnfinishedTools()) {
+             AgentBoundary.ToolPreflight
+-        } else AgentBoundary.BeforeModel
++        } else {
++            AgentBoundary.BeforeModel
++        }
+         while (true) {
+             phase = when (phase) {
+                 AgentBoundary.ToolPreflight -> {
+@@ -102,7 +107,10 @@ internal class AgentLoop(
+     private fun hasUnfinishedTools() = message?.getTools()?.any { !it.isExecuted } == true
+ 
+     private fun cursor(point: AgentBoundary, toolCallId: String? = null) = AgentCursor(
+-        point, logicalSteps, toolCallId, message?.id?.toString(),
++        point,
++        logicalSteps,
++        toolCallId,
++        message?.id?.toString(),
+         message?.getTools().orEmpty().map { AgentToolBinding(it.toolCallId, it.toolName, it.input) },
+     )
+ 
+@@ -116,7 +124,9 @@ internal class AgentLoop(
+                 require(saved.toolCallId != null && pending.firstOrNull()?.toolCallId == saved.toolCallId) {
+                     "Resume cursor does not identify the next unfinished tool"
+                 }
+-                require(pending.none { it.isPending || it.startedAt != null }) { "Tool needs approval or effect reconciliation" }
++                require(
++                    pending.none { it.isPending || it.startedAt != null }
++                ) { "Tool needs approval or effect reconciliation" }
+             }
+             AgentBoundary.ToolPreflight -> require(pending.isNotEmpty()) { "No batch to preflight" }
+             AgentBoundary.AfterTools -> require(tools.isNotEmpty() && pending.isEmpty()) { "Tool batch is incomplete" }
+@@ -151,7 +161,8 @@ internal class AgentLoop(
+     }
+ 
+     private suspend fun admitModel(attempt: Int) {
+-        val denied = request.control.prepareModel(logicalSteps, attempt) ?: request.control.admitModel(logicalSteps, attempt)
++        val denied =
++            request.control.prepareModel(logicalSteps, attempt) ?: request.control.admitModel(logicalSteps, attempt)
+         kotlinx.coroutines.currentCoroutineContext().ensureActive()
+         denied?.let { token ->
+             throw AgentYield(cursor(AgentBoundary.BeforeModel), token)
+@@ -172,7 +183,7 @@ internal class AgentLoop(
+                 }
+             }
+         )
+-        if (updated != current) update(updated)
++        if (updated != current) update(updated, AgentBoundary.ToolPreflight)
+         return updated.getTools().filter { it.isPending }.mapTo(LinkedHashSet()) { it.toolCallId }
+     }
+ 
+@@ -192,7 +203,18 @@ internal class AgentLoop(
+         } else {
+             generate(step.messages, params, base)
+         }
+-        update(hooks.finishStep(generated, newPartsFrom = base.parts.size).copy(finishedAt = now()))
++        val finished = hooks.finishStep(generated, newPartsFrom = base.parts.size).copy(finishedAt = now())
++        update(
++            finished,
++            if (finished.getTools().any {
++                    !it.isExecuted
++                }) {
++                AgentBoundary.ToolPreflight
++            } else {
++                AgentBoundary.BeforeComplete
++            },
++            nextStep = logicalSteps + 1,
++        )
+     }
+ 
+     // 续写普通回复时最后一个 part 不是执行完的工具或通知，这时追加会把续写变成新的一轮
+@@ -277,22 +299,37 @@ internal class AgentLoop(
+             boundary(AgentBoundary.BeforeTool, tool.toolCallId)
+             // 只给真正运行的工具计时；开始时先写一次，界面才能在执行中实时显示耗时
+             val runs = tool.approvalState == ToolApprovalState.Auto || tool.approvalState == ToolApprovalState.Approved
+-            if (runs) updateTool(tool.toolCallId) { it.copy(startedAt = Clock.System.now(), finishedAt = null) }
++            if (runs) {
++                updateTool(
++                    tool.toolCallId,
++                    starting = true
++                ) { it.copy(startedAt = Clock.System.now(), finishedAt = null) }
++                kotlinx.coroutines.currentCoroutineContext().ensureActive()
++                request.control.admitTool(checkNotNull(message), tool)?.let {
++                    throw AgentYield(cursor(AgentBoundary.BeforeTool, tool.toolCallId), it)
++                }
++            }
+             val output = execute(tool)
+-            updateTool(tool.toolCallId) {
++            updateTool(tool.toolCallId, starting = false) {
+                 it.copy(output = output, finishedAt = if (runs) Clock.System.now() else it.finishedAt)
+             }
+         }
+     }
+ 
+-    private suspend fun updateTool(toolCallId: String, transform: (UIMessagePart.Tool) -> UIMessagePart.Tool) {
++    private suspend fun updateTool(
++        toolCallId: String,
++        starting: Boolean,
++        transform: (UIMessagePart.Tool) -> UIMessagePart.Tool,
++    ) {
+         val current = checkNotNull(message)
++        val updated = current.copy(parts = current.parts.map { part ->
++            if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) transform(part) else part
++        })
++        val next = updated.getTools().firstOrNull { !it.isExecuted }
+         update(
+-            current.copy(
+-                parts = current.parts.map { part ->
+-                    if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) transform(part) else part
+-                }
+-            )
++            updated,
++            if (starting || next != null) AgentBoundary.BeforeTool else AgentBoundary.AfterTools,
++            toolCallId = if (starting) toolCallId else next?.toolCallId,
+         )
+     }
+ 
+@@ -321,8 +358,19 @@ internal class AgentLoop(
+ 
+     private fun findTool(name: String) = request.tools.find { it.name == name }
+ 
+-    private suspend fun update(updated: UIMessage) {
+-        request.control.commit(updated)
++    private suspend fun update(
++        updated: UIMessage,
++        nextBoundary: AgentBoundary = AgentBoundary.BeforeModel,
++        toolCallId: String? = null,
++        nextStep: Int = logicalSteps,
++    ) {
++        request.control.checkpoint(updated, AgentCursor(
++            nextBoundary,
++            nextStep,
++            toolCallId,
++            updated.id.toString(),
++            updated.getTools().map { AgentToolBinding(it.toolCallId, it.toolName, it.input) },
++        ))?.let { throw AgentYield(cursor(nextBoundary, toolCallId), it) }
+         message = updated
+         events.emit(AgentEvent.MessageUpdated(updated))
+     }
+diff --git a/ai/src/main/java/me/rerere/ai/core/Tool.kt b/ai/src/main/java/me/rerere/ai/core/Tool.kt
+index 595d37c1a0f6c78f3d540908bb2e01315f339409..a2c8e87c1f70bbbd38c8cd70c00fce0f6b5ab91e 100644
+--- a/ai/src/main/java/me/rerere/ai/core/Tool.kt
++++ b/ai/src/main/java/me/rerere/ai/core/Tool.kt
+@@ -15,6 +15,8 @@ data class Tool(
+     val parameters: () -> InputSchema? = { null },
+     val systemPrompt: (model: Model, messages: List<UIMessage>) -> String = { _, _ -> "" },
+     val needsApproval: (JsonElement) -> Boolean = { false },
++    /** Version of the executable implementation; plugin registrations use their package lease. */
++    val executionVersion: String = "host-v1",
+     val execute: suspend (JsonElement) -> List<UIMessagePart>
+ )
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
+index 4b6e25b4ada4f7cb175a95d4f6b3f3e571005c78..d5cdd0859e03d7d0e1dc20e230dcbc3f3ee92201 100644
+--- a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
++++ b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
+@@ -286,6 +286,7 @@ class RouteActivity : ComponentActivity() {
+                     is AppEvent.OpenUsageAccessSettings -> this@RouteActivity.openUsageAccessSettings()
+                     is AppEvent.ChatGenerationUpdate -> Unit // 由 ChatNotificationManager 消费
+                     is AppEvent.ChatGenerationEnded -> Unit // 由 ChatNotificationManager 消费
++                    is AppEvent.ChatGenerationSegmentEnded -> Unit
+                 }
+             }
+         }
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/event/AppEvent.kt b/app/src/main/java/me/rerere/rikkahub/data/event/AppEvent.kt
+index 40d882fe0dc133ac099e788b0311f8916edc0905..19dd58a36bc65912ce3c3436db1a04b14403c1c9 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/event/AppEvent.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/event/AppEvent.kt
+@@ -14,6 +14,9 @@ sealed class AppEvent {
+         val senderName: String,
+     ) : AppEvent()
+ 
++    /** A coroutine segment stopped streaming; the logical run may still be waiting. */
++    data class ChatGenerationSegmentEnded(val conversationId: Uuid) : AppEvent()
++
+     /**
+      * 聊天生成结束（完成、失败或取消）。
+      * [contentPreview] 为 null 时仅取消 Live Update 通知，不发送完成通知。
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/model/Conversation.kt b/app/src/main/java/me/rerere/rikkahub/data/model/Conversation.kt
+index 4c83b6bd525b3ccec71250bf62eca3d7900a150b..da22c781b5fd0446f6afecd4f81a4c0f50a866a1 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/model/Conversation.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/model/Conversation.kt
+@@ -13,6 +13,7 @@ import me.rerere.ai.ui.UIMessagePart
+ import me.rerere.ai.util.InstantSerializer
+ import me.rerere.rikkahub.data.datastore.DEFAULT_ASSISTANT_ID
+ import me.rerere.rikkahub.data.datastore.Settings
++import me.rerere.rikkahub.plugins.visiblePluginNodes
+ import java.time.Instant
+ import kotlin.uuid.Uuid
+ 
+@@ -53,9 +54,11 @@ data class Conversation(
+     /**
+      *  当前选中的 message
+      */
++    val visibleMessageNodes: List<MessageNode> get() = visiblePluginNodes()
++
+     val currentMessages
+         get(): List<UIMessage> {
+-            return messageNodes.map { node -> node.messages[node.selectIndex] }
++            return visibleMessageNodes.map { node -> node.messages[node.selectIndex] }
+         }
+ 
+     fun getMessageNodeByMessageId(messageId: Uuid): MessageNode? {
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/model/ConversationFork.kt b/app/src/main/java/me/rerere/rikkahub/data/model/ConversationFork.kt
+index 1d3b7868c7bc24a1a57febacd8e7e7467c1757af..08b92399f26cfbd88cb1b90a24e0c8cad3885450 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/model/ConversationFork.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/model/ConversationFork.kt
+@@ -1,5 +1,6 @@
+ package me.rerere.rikkahub.data.model
+ 
++import me.rerere.rikkahub.plugins.inheritPluginHistory
+ import kotlin.uuid.Uuid
+ 
+ private val forkTitleSuffixRegex = Regex("""\((\d+)\)$""")
+@@ -25,13 +26,14 @@ internal fun Conversation.fork(
+     existingTitles: Set<String>,
+     copyFile: (url: String) -> String,
+ ): Conversation? {
+-    val nodeIndex = messageNodes.indexOfFirst { node -> node.messages.any { it.id == messageId } }
++    val nodes = visibleMessageNodes
++    val nodeIndex = nodes.indexOfFirst { node -> node.messages.any { it.id == messageId } }
+     if (nodeIndex == -1) return null
+     return Conversation(
+         id = Uuid.random(),
+         assistantId = assistantId,
+         title = forkConversationTitle(title, existingTitles),
+-        messageNodes = messageNodes.take(nodeIndex + 1).map { node ->
++        messageNodes = nodes.take(nodeIndex + 1).map { node ->
+             node.copy(
+                 id = Uuid.random(),
+                 messages = node.messages.map { message ->
+@@ -45,5 +47,5 @@ internal fun Conversation.fork(
+         config = config,
+         workspaceCwd = workspaceCwd,
+         folderId = folderId,
+-    )
++    ).inheritPluginHistory(this)
+ }
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/model/ConversationMessages.kt b/app/src/main/java/me/rerere/rikkahub/data/model/ConversationMessages.kt
+index fd9044283207a63685b05bd0b481bab75c03e6ef..3bb6597ec6545d1ea4d815432743468252830c40 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/model/ConversationMessages.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/model/ConversationMessages.kt
+@@ -69,16 +69,15 @@ internal fun Conversation.withNodeFavorite(nodeId: Uuid, favorite: Boolean): Con
+  * 当前分支里没有这个还在等待审批的工具调用时返回 null，用来忽略重复点击和对已完成或非当前分支工具的过期审批。
+  */
+ internal fun Conversation.withToolApproval(toolCallId: String, approvalState: ToolApprovalState): Conversation? {
+-    if (currentMessages.none { message ->
+-            message.getTools().any { it.toolCallId == toolCallId && it.isPending }
+-        }) {
+-        return null
+-    }
++    val target = currentMessages.singleOrNull { message ->
++        message.getTools().any { it.toolCallId == toolCallId && it.isPending }
++    } ?: return null
+     return copy(
+         messageNodes = messageNodes.map { node ->
+             node.copy(messages = node.messages.map { message ->
+                 message.copy(parts = message.parts.map { part ->
+-                    if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) {
++                    if (message.id == target.id && part is UIMessagePart.Tool &&
++                        part.toolCallId == toolCallId && part.isPending) {
+                         part.copy(approvalState = approvalState)
+                     } else {
+                         part
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt b/app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt
+index 3ad1db206aca22dc26ad4b1ac7d6e0f8fb9bc83b..11e0867f2210d253ea533ecf06121adbea14c5e2 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/repository/ConversationRepository.kt
+@@ -24,11 +24,11 @@ import me.rerere.rikkahub.data.db.fts.MessageSearchSort
+ import me.rerere.rikkahub.data.files.FilesManager
+ import me.rerere.rikkahub.data.model.Conversation
+ import me.rerere.rikkahub.data.model.MessageNode
+-import me.rerere.rikkahub.utils.JsonInstant
+ import me.rerere.rikkahub.plugins.storage.readPluginDraft
+ import me.rerere.rikkahub.plugins.storage.readPluginState
+ import me.rerere.rikkahub.plugins.storage.writePluginDraft
+ import me.rerere.rikkahub.plugins.storage.writePluginState
++import me.rerere.rikkahub.utils.JsonInstant
+ import java.time.Instant
+ import kotlin.uuid.Uuid
+ 
+@@ -307,6 +307,11 @@ class ConversationRepository(
+ 
+     suspend fun writePluginDraft(conversation: Conversation) = database.writePluginDraft(conversation)
+ 
++    suspend fun writePluginControl(conversation: Conversation) = database.withTransaction {
++        check(conversationDAO.existsById(conversation.id.toString())) { "Conversation was removed" }
++        database.writePluginState(conversation)
++    }
++
+     suspend fun pluginDraftIdsOfAssistant(assistantId: Uuid): List<Uuid> =
+         database.pluginConversationDao().drafts().map { JsonInstant.decodeFromString<Conversation>(it) }
+             .filter { it.assistantId == assistantId }.map { it.id }
+@@ -332,8 +337,8 @@ class ConversationRepository(
+             )
+             saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+             database.writePluginState(conversation)
++            messageFtsManager.indexConversation(conversation)
+         }
+-        messageFtsManager.indexConversation(conversation)
+     }
+ 
+     suspend fun updateConversation(conversation: Conversation) {
+@@ -345,8 +350,8 @@ class ConversationRepository(
+             messageNodeDAO.deleteByConversation(conversation.id.toString())
+             saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+             database.writePluginState(conversation)
++            messageFtsManager.indexConversation(conversation)
+         }
+-        messageFtsManager.indexConversation(conversation)
+     }
+ 
+     suspend fun deleteConversation(conversation: Conversation) {
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatNotificationManager.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatNotificationManager.kt
+index ec52ff80f803a5e0030d5ca2db604d06bcddb6aa..d328742c1a1b7331b29ecc0205a5e76ed1a741cf 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatNotificationManager.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatNotificationManager.kt
+@@ -62,6 +62,7 @@ class ChatNotificationManager(
+                 when (event) {
+                     is AppEvent.ChatGenerationUpdate -> handleGenerationUpdate(event)
+                     is AppEvent.ChatGenerationEnded -> handleGenerationEnded(event)
++                    is AppEvent.ChatGenerationSegmentEnded -> cancelLiveUpdateNotification(event.conversationId)
+                     else -> {}
+                 }
+             }
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 6677692c18664eb417aea78a4764df3b1b612a31..26249905770cc4a964e268e94bcfe12859c0a308 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -137,7 +137,7 @@ class ChatService(
+     }
+ 
+     private fun replyTargetOf(conversation: Conversation, regenerateNodeId: Uuid?): ReplyTarget {
+-        val nodes = conversation.messageNodes
++        val nodes = conversation.visibleMessageNodes
+         val history = if (regenerateNodeId != null) {
+             val index = nodes.indexOfFirst { it.id == regenerateNodeId }
+             check(index != -1) { "Message node $regenerateNodeId not found" }
+@@ -155,7 +155,7 @@ class ChatService(
+ 
+     /** 一轮生成的结果 */
+     private sealed interface TurnResult {
+-        data class Finished(val reason: AgentFinishReason) : TurnResult
++        data class Finished(val reason: AgentFinishReason, val reply: UIMessage?) : TurnResult
+ 
+         /** 没能完成：错误已经报告给用户，消息队列也已暂停 */
+         data object Failed : TurnResult
+@@ -171,6 +171,8 @@ class ChatService(
+ 
+         override suspend fun writeDraft(current: Conversation) = conversationRepo.writePluginDraft(current)
+ 
++        override suspend fun writeControl(previous: Conversation, current: Conversation) = conversationRepo.writePluginControl(current)
++
+         override suspend fun write(previous: Conversation?, current: Conversation) {
+             if (previous == null && !conversationRepo.existsConversationById(current.id)) {
+                 conversationRepo.insertConversation(current)
+@@ -178,10 +180,15 @@ class ChatService(
+                 conversationRepo.updateConversation(current)
+             }
+             if (previous != null && previous.messageNodes !== current.messageNodes) {
+-                withContext(Dispatchers.IO) { deleteUnreferencedFiles(previous, current) }
+-                val currentNodeIds = current.messageNodes.mapTo(HashSet()) { it.id }
+-                val removedNodeIds = previous.messageNodes.map { it.id }.filterNot { it in currentNodeIds }
+-                if (removedNodeIds.isNotEmpty()) conversationRepo.deleteNodeFavorites(current.id, removedNodeIds)
++                // The durable write already succeeded. Cleanup cannot change its reported outcome.
++                try {
++                    withContext(Dispatchers.IO) { deleteUnreferencedFiles(previous, current) }
++                    val currentNodeIds = current.messageNodes.mapTo(HashSet()) { it.id }
++                    val removedNodeIds = previous.messageNodes.map { it.id }.filterNot { it in currentNodeIds }
++                    if (removedNodeIds.isNotEmpty()) conversationRepo.deleteNodeFavorites(current.id, removedNodeIds)
++                } catch (error: Exception) {
++                    Log.w(TAG, "Post-commit cleanup deferred", error)
++                }
+             }
+         }
+     }
+@@ -221,8 +228,8 @@ class ChatService(
+     }
+ 
+     // 生成完成流
+-    private val _generationDoneFlow = MutableSharedFlow<Uuid>()
+-    val generationDoneFlow: SharedFlow<Uuid> = _generationDoneFlow.asSharedFlow()
++    private val _generationDoneFlow = MutableSharedFlow<CompletedRunReply>()
++    val generationDoneFlow: SharedFlow<CompletedRunReply> = _generationDoneFlow.asSharedFlow()
+ 
+     fun cleanup() = runCatching { sessionManager.cleanup() }
+ 
+@@ -489,6 +496,19 @@ class ChatService(
+         val session = sessionManager.get(conversationId) ?: return null
+         synchronized(session) {
+             if (!session.canStartNextTurn) return null
++            if (!session.isInitialized) {
++                // Load and recover before removing input from the queue. Completion retries dispatch.
++                val loading = launchGenerationJob(conversationId = conversationId) {
++                    try {
++                        ensureInitialized(session)
++                    } catch (error: Exception) {
++                        reportFailure(session, error, R.string.error_title_send_message)
++                        throw error
++                    }
++                }
++                session.setJob(loading)
++                return loading
++            }
+             return when (val next = session.inbox.takeNext() ?: return null) {
+                 is InboxTurn.Message -> {
+                     session.submittingMessage = next.message
+@@ -516,7 +536,6 @@ class ChatService(
+                 val processedContent = queued.parts.replaceUserRegexes(assistant)
+ 
+                 // 添加消息到列表
+-                val previousIds = session.state.value.currentMessages.mapTo(HashSet()) { it.id }
+                 // 等待中的通知存成用户消息之前的节点：写进回复的话，重新生成时就丢了。
+                 // 不回复时留在收件箱，这一轮结束后单独开一轮
+                 val notices = if (queued.answer) session.inbox.takeNotices() else emptyList()
+@@ -534,20 +553,17 @@ class ChatService(
+                 session.submittingMessage = null
+ 
+                 // 开始补全
+-                val result = if (queued.answer) runTurn(session) else null
++                val result = if (queued.answer) runTurn(session, autoPlay = queued.reply == null) else null
+ 
+                 queued.reply?.completeWith(runCatching {
++                    if (result == TurnResult.Waiting) throw MessageQueuePausedException()
+                     check(result != TurnResult.Failed) { context.getString(R.string.chat_page_voice_generation_failed) }
+                     check((result as? TurnResult.Finished)?.reason !is AgentFinishReason.AwaitingApproval) {
+                         context.getString(R.string.chat_page_voice_tool_approval)
+                     }
+-                    session.state.value.currentMessages
+-                        .filter { it.id !in previousIds && it.role == MessageRole.ASSISTANT }
+-                        .joinToString("\n") { it.toText() }
++                    (result as? TurnResult.Finished)?.reply?.toText().orEmpty()
+                 })
+-                // Voice owns playback, including when its observer has already left the page.
+-                // The ordinary autoplay collector must not read a late voice reply again.
+-                if (queued.reply == null) _generationDoneFlow.emit(conversationId)
++                // Terminal playback is emitted by runTurn, after persisted completion.
+             } catch (e: Exception) {
+                 queued.reply?.completeExceptionally(e)
+                 e.printStackTrace()
+@@ -583,7 +599,6 @@ class ChatService(
+                 session.update { it.copy(messageNodes = it.messageNodes + notices.toNoticeNode()) }
+                 session.flush()
+                 runTurn(session)
+-                _generationDoneFlow.emit(conversationId)
+             } catch (e: NotFoundException) {
+                 Log.w(TAG, "sendQueuedNotices: conversation $conversationId not found, dropping notices")
+                 session.inbox.takeNotices()
+@@ -633,7 +648,6 @@ class ChatService(
+                         runTurn(session, regenerateNodeId = node.id)
+                     }
+ 
+-                    _generationDoneFlow.emit(conversationId)
+                 } catch (e: Exception) {
+                     reportFailure(session, e, R.string.error_title_regenerate_message)
+                 }
+@@ -682,7 +696,6 @@ class ChatService(
+                             runTurn(session)
+                         }
+ 
+-                        _generationDoneFlow.emit(conversationId)
+                     }
+                 } catch (e: Exception) {
+                     reportFailure(session, e, R.string.error_title_tool_approval)
+@@ -703,7 +716,7 @@ class ChatService(
+      * 开了自动压缩时，工具执行完发现上下文占用达到阈值就在这里压缩，之后的步骤写进检查点后面新的一条回复。
+      * 失败时报告错误、暂停消息队列并返回 [TurnResult.Failed]；取消时直接抛出。
+      */
+-    private suspend fun runTurn(session: ConversationSession, regenerateNodeId: Uuid? = null): TurnResult {
++    private suspend fun runTurn(session: ConversationSession, regenerateNodeId: Uuid? = null, autoPlay: Boolean = true): TurnResult {
+         val conversationId = session.id
+         // 先清理上一轮状态；确定历史后，仅为真正的续写恢复消息 ID。
+         session.replyMessageId.value = null
+@@ -718,10 +731,15 @@ class ChatService(
+                     ?.let { nodeId -> latest.messageNodes.indexOfFirst { it.id == nodeId } }
+                     ?.takeIf { it != -1 }
+                     ?: latest.messageNodes.size
+-                latest.copy(chatSuggestions = emptyList()).withoutUnresumableToolCalls(untilNode)
++                val cleaned = latest.copy(chatSuggestions = emptyList())
++                if (latest.executionLedger().runs.isEmpty()) cleaned.withoutUnresumableToolCalls(untilNode) else cleaned
+             }
+ 
+-            var target = replyTargetOf(conversation, regenerateNodeId)
++            val activeRun = conversation.executionLedger().runs.values.singleOrNull {
++                it.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE
++            }
++            val runConversation = activeRun?.let { conversation.forInputPath(it.inputIds) } ?: conversation
++            var target = replyTargetOf(runConversation, regenerateNodeId)
+             // 接着上一条助手消息写时就是它，否则等第一次输出。要在 createContext 之前换掉，
+             // 它会挂起也可能失败，期间或失败后不能还指着上一轮的回复
+             session.replyMessageId.value = target.continuedMessageId
+@@ -738,14 +756,15 @@ class ChatService(
+ 
+             var finishReason: AgentFinishReason? = null
+             var afterOperation = false
+-            val run = SessionAgentRun.open(session, target.history) { boundary, _ ->
+-                builtinContext.boundaryOperation(
+-                    boundary, session.state.value, settingsStore.settingsFlow.value, turn.model, canCompress, afterOperation
++            val run = SessionAgentRun.open(session, target.history) { boundary, ref ->
++                builtinContext.boundaryDecision(
++                    session, ref, boundary, settingsStore.settingsFlow.value, turn.model, canCompress, afterOperation
+                 )
+             }
+             try {
+                 while (true) {
+-                    val replyNodeId = target.nodeId
++                    val replyNodeId = session.state.value.executionLedger().runs.getValue(run.ref.runId).replyNodeId
++                        ?.let(Uuid::parse) ?: target.nodeId
+                     val (request, hooks) = requestFactory.createAgent(
+                         turn = turn,
+                         messages = target.history,
+@@ -797,10 +816,13 @@ class ChatService(
+                     }
+                     val operation = run.pending
+                     if (operation == null) break
+-                    afterOperation = executeBoundaryOperation(session, operation)
+-                    if (!afterOperation && !operationDispatcher.continueRunAfterFailure(operation)) break
++                    val outcome = executeBoundaryOperation(session, operation)
++                    afterOperation = outcome is OperationDispatch.Settled
++                    if (!operationDispatcher.mayResumeAfter(operation, outcome)) break
+                     run.operationFinished()
+-                    target = replyTargetOf(session.state.value, regenerateNodeId = null)
++                    target = replyTargetOf(session.state.value.forInputPath(
++                        session.state.value.executionLedger().runs.getValue(run.ref.runId).inputIds
++                    ), regenerateNodeId = null)
+                     session.replyMessageId.value = target.continuedMessageId
+                 }
+             } catch (error: Throwable) {
+@@ -810,16 +832,8 @@ class ChatService(
+                 withContext(NonCancellable) {
+                     session.processingStatus.value = null
+                     // 可能被取消了，或者意外结束，兜底保存
+-                    val finished = session.finishGeneration()
+-                    // 生成结束：取消 Live Update 通知，后台时发送完成通知
+-                    appEventBus.emit(
+-                        AppEvent.ChatGenerationEnded(
+-                            conversationId = conversationId,
+-                            senderName = senderName,
+-                            contentPreview = finished.currentMessages.lastOrNull()
+-                                ?.toText()?.take(50)?.trim() ?: "",
+-                        )
+-                    )
++                    session.finishGeneration()
++                    appEventBus.emit(AppEvent.ChatGenerationSegmentEnded(conversationId))
+                 }
+             }
+ 
+@@ -827,13 +841,18 @@ class ChatService(
+                 session.inbox.pause()
+                 return TurnResult.Waiting
+             }
++            val completedReply = session.state.value.completedRunReply(run.ref)
++            completedReply?.let { reply ->
++                appEventBus.emit(AppEvent.ChatGenerationEnded(conversationId, senderName, reply.toText().take(50).trim()))
++                if (autoPlay) _generationDoneFlow.emit(CompletedRunReply(conversationId, run.ref.runId, reply))
++            }
+             // 等待审批时这一轮还没结束，标题、建议和记忆整理等审批之后再做
+             if (reason !is AgentFinishReason.AwaitingApproval) {
+                 sessionManager.launchWithSession(conversationId) { generateTitle(conversationId) }
+                 sessionManager.launchWithSession(conversationId) { generateSuggestion(conversationId) }
+                 if (turn.assistant.enableMemory) memoryConsolidationScheduler.onTurnFinished(session.state.value)
+             }
+-            return TurnResult.Finished(reason)
++            return TurnResult.Finished(reason, completedReply)
+         } catch (e: CancellationException) {
+             appEventBus.tryEmit(AppEvent.ChatGenerationEnded(conversationId, senderName, null))
+             throw e
+@@ -896,6 +915,8 @@ class ChatService(
+     }
+ 
+     private suspend fun finishInterruptedPendingTools(session: ConversationSession) {
++        // Persistent execution owns tool evidence, including effects whose outcome is unknown.
++        if (session.state.value.executionLedger().runs.isNotEmpty()) return
+         session.tryUpdate { it.cancelInterruptedTools() }
+         session.flush()
+     }
+@@ -1038,8 +1059,18 @@ class ChatService(
+         val job = launchGenerationJob(conversationId = session.id, activity = SessionActivity.Operation) {
+             session.processingStatus.value = operationDispatcher.label(call)
+             try {
+-                operationDispatcher.execute(session, call)
+-                deliver(Result.success(Unit))
++                when (val outcome = operationDispatcher.dispatch(session, call)) {
++                    is OperationDispatch.Settled -> deliver(Result.success(Unit))
++                    is OperationDispatch.Rejected -> deliver(Result.failure(outcome.error))
++                    is OperationDispatch.NeedsReconciliation -> {
++                        session.inbox.pause()
++                        deliver(Result.failure(outcome.error))
++                    }
++                    is OperationDispatch.StorageBlocked -> {
++                        session.inbox.pause()
++                        deliver(Result.failure(outcome.error))
++                    }
++                }
+             } catch (error: Exception) {
+                 if (error is CancellationException) throw error
+                 deliver(Result.failure(error))
+@@ -1052,16 +1083,18 @@ class ChatService(
+         return job
+     }
+ 
+-    private suspend fun executeBoundaryOperation(session: ConversationSession, call: OperationCall): Boolean {
++    private suspend fun executeBoundaryOperation(session: ConversationSession, call: OperationCall): OperationDispatch {
+         session.setActivity(SessionActivity.Operation)
+         session.processingStatus.value = operationDispatcher.label(call)
+         return try {
+-            operationDispatcher.execute(session, call)
+-            true
+-        } catch (error: Exception) {
+-            if (error is CancellationException) throw error
+-            addError(error, session.id)
+-            false
++            val outcome = operationDispatcher.dispatch(session, call)
++            when (outcome) {
++                is OperationDispatch.Settled -> Unit
++                is OperationDispatch.Rejected -> addError(outcome.error, session.id)
++                is OperationDispatch.NeedsReconciliation -> addError(outcome.error, session.id)
++                is OperationDispatch.StorageBlocked -> addError(outcome.error, session.id)
++            }
++            outcome
+         } finally {
+             session.processingStatus.value = null
+             if (currentCoroutineContext().isActive) session.setActivity(SessionActivity.Generating)
+@@ -1341,10 +1374,9 @@ class ChatService(
+                         settings = settings,
+                         sourceText = messageText,
+                         targetLanguage = targetLanguage
+-                    ) { translatedText ->
+-                        // Update translation field in real-time
++                    ).collect { translatedText ->
+                         session.update { it.withTranslation(message.id, translatedText) }
+-                    }.collect { /* Final translation already handled in onStreamUpdate */ }
++                    }
+ 
+                     session.flush()
+                 } catch (e: Exception) {
+@@ -1436,13 +1468,14 @@ class ChatService(
+ 
+     // 停止当前会话生成任务（不清理会话缓存）
+     suspend fun stopGeneration(conversationId: Uuid) {
+-        val session = sessionManager.get(conversationId) ?: return
++        val session = sessionManager.getOrCreate(conversationId)
+         val jobs = synchronized(session) {
+             session.inbox.pause()
+             session.cancelJobs()
+         }
+-        if (jobs.isEmpty()) return
+         jobs.forEach { it.join() }
+-        if (session.isInitialized) finishInterruptedPendingTools(session)
++        ensureInitialized(session)
++        session.cancelPluginRuns()
++        finishInterruptedPendingTools(session)
+     }
+ }
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt b/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
+index 150ffa6d22079b3161a13b1727206832112fdbe7..0f1150686c733c4464534b1e26e10443c366b501 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ConversationSession.kt
+@@ -13,6 +13,9 @@ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.sync.Mutex
+ import kotlinx.coroutines.sync.withLock
+ import kotlinx.coroutines.withContext
++import me.rerere.rikkahub.plugins.bindPromotedPluginDraft
++import me.rerere.rikkahub.plugins.hasUnfinishedPluginRun
++import me.rerere.rikkahub.plugins.recoverPluginExecution
+ import me.rerere.ai.ui.finishReasoning
+ import me.rerere.rikkahub.data.model.Conversation
+ import me.rerere.rikkahub.data.model.isAwaitingToolApproval
+@@ -34,6 +37,9 @@ interface ConversationStore {
+     /** [previous] 是上次落库或加载时的状态，从未落库的新会话为 null */
+     suspend fun write(previous: Conversation?, current: Conversation)
+ 
++    /** Control-only delta in the same database; no message-node reconstruction is necessary. */
++    suspend fun writeControl(previous: Conversation, current: Conversation) = write(previous, current)
++
+     /** Persists an unpromoted empty conversation without binding assistant configuration. */
+     suspend fun writeDraft(current: Conversation) {
+         check(current.pluginState.isEmpty()) { "This store does not support plugin drafts" }
+@@ -57,6 +63,8 @@ class ConversationSession(
+     val state: StateFlow<Conversation> = _state.asStateFlow()
+     private val initializationMutex = Mutex()
+     private val writeMutex = Mutex()
++    // Lock order: writeMutex -> stateMutex. UI edits never wait while holding a JVM monitor.
++    private val stateMutex = Mutex()
+ 
+     @Volatile
+     var isInitialized = false
+@@ -92,25 +100,28 @@ class ConversationSession(
+             writeMutex.withLock {
+                 lastWritten = conversation
+                 existsInDatabase = loaded != null && !loaded.pluginDraft
+-            }
+-            synchronized(this) {
+-                _state.value = conversation
+-                isInitialized = true
++                val recovered = conversation.recoverPluginExecution()
++                withContext(NonCancellable) {
++                    if (recovered !== conversation) persistLocked(recovered)
++                    stateMutex.withLock {
++                        _state.value = recovered
++                        isInitialized = true
++                    }
++                }
+             }
+         }
+     }
+ 
+     /** 在最新状态上修改会话，只改内存；需要落库时之后调用 [flush] */
+-    fun update(transform: (Conversation) -> Conversation): Conversation = checkNotNull(tryUpdate(transform))
++    suspend fun update(transform: (Conversation) -> Conversation): Conversation = checkNotNull(tryUpdate(transform))
+ 
+-    /** 同 [update]，[transform] 返回 null 表示没什么可改的，这时不修改并返回 null */
+-    @Synchronized
+-    fun tryUpdate(transform: (Conversation) -> Conversation?): Conversation? {
++    /** Ordinary edits remain visible immediately, except while a confirmed commit is in flight. */
++    suspend fun tryUpdate(transform: (Conversation) -> Conversation?): Conversation? = stateMutex.withLock {
+         check(isInitialized) { "Conversation $id is not loaded yet" }
+-        val updated = transform(_state.value) ?: return null
++        val updated = transform(_state.value) ?: return@withLock null
+         require(updated.id == id)
+         _state.value = updated
+-        return updated
++        updated
+     }
+ 
+     /**
+@@ -126,29 +137,35 @@ class ConversationSession(
+      * Serializes a receipt and its message changes with all other writes.
+      * [transform] is pure and may be re-evaluated after asynchronous configuration preparation.
+      * Validation runs on the latest state at adoption; persistence writes that exact snapshot.
+-     * A failed write returns no receipt. Retrying an idempotent transition still flushes dirty state.
++     * The candidate stays private until storage confirms it. Failure cannot leave a result for flush to adopt.
+      */
+     internal suspend fun commitExtension(
+         expectedIncarnation: Int = incarnation,
+         transform: (Conversation) -> Conversation,
+     ): Conversation = writeMutex.withLock {
+         check(isInitialized && incarnation == expectedIncarnation) { "Session was replaced" }
+-        var current = synchronized(this) {
++        // Settings preparation may suspend; edits during preparation must be revalidated.
++        val draft = stateMutex.withLock { isUnpromotedDraft(transform(state.value)) }
++        val prepare = if (draft) null else store.prepareWrite()
++        stateMutex.withLock {
++            check(incarnation == expectedIncarnation) { "Session was replaced" }
+             val before = state.value
+             val proposed = transform(before)
+             require(proposed.id == id)
+-            if (isUnpromotedDraft(proposed)) {
+-                update { if (proposed == before) before else proposed }
+-            } else null
+-        }
+-        if (current == null) {
+-            val prepare = store.prepareWrite()
+-            current = update { latest ->
+-                val proposed = prepare(transform(latest)).let { if (it.pluginDraft) it.copy(pluginDraft = false) else it }
+-                if (proposed == latest) latest else proposed
++            // Promotion racing with draft preparation retries through the caller instead of binding stale settings.
++            check(prepare != null || isUnpromotedDraft(proposed)) { "Draft was promoted during preparation" }
++            val candidate = if (prepare == null) proposed else prepare(proposed).let {
++                (if (it.pluginDraft) it.copy(pluginDraft = false) else it).bindPromotedPluginDraft()
+             }
++            val current = if (candidate == before) before else candidate
++            // Once storage is entered, cancellation waits for its outcome and publication.
++            // Later effect admission still checks cancellation and all gates again.
++            withContext(NonCancellable) {
++                persistLocked(current)
++                _state.value = current
++            }
++            current
+         }
+-        persistLocked(checkNotNull(current))
+     }
+ 
+     private fun isUnpromotedDraft(conversation: Conversation): Boolean =
+@@ -160,7 +177,7 @@ class ConversationSession(
+         if (isUnpromotedDraft(latest)) return persistLocked(latest)
+         val prepare = store.prepareWrite()
+         val current = update { latestState ->
+-            prepare(latestState).let { if (it.pluginDraft) it.copy(pluginDraft = false) else it }
++            prepare(latestState).let { (if (it.pluginDraft) it.copy(pluginDraft = false) else it).bindPromotedPluginDraft() }
+         }
+         return persistLocked(current)
+     }
+@@ -173,7 +190,11 @@ class ConversationSession(
+                 lastWritten = current
+             }
+         } else {
+-            store.write(previous = lastWritten.takeIf { existsInDatabase }, current = current)
++            if (existsInDatabase && current.copy(pluginState = lastWritten.pluginState) == lastWritten) {
++                store.writeControl(lastWritten, current)
++            } else {
++                store.write(previous = lastWritten.takeIf { existsInDatabase }, current = current)
++            }
+             lastWritten = current
+             existsInDatabase = true
+         }
+@@ -206,9 +227,12 @@ class ConversationSession(
+     ): Boolean {
+         return writeMutex.withLock {
+             if (incarnation != expectedIncarnation) return@withLock false
+-            val (before, updated) = synchronized(this) {
++            val (before, updated) = stateMutex.withLock {
+                 val before = _state.value
+-                before to update(transform)
++                val updated = transform(before)
++                require(updated.id == id)
++                _state.value = updated
++                before to updated
+             }
+             persist(updated)
+             // 改之前内存和数据库一致，按列写完两边又一致了，回收时不必整份重写；
+@@ -235,7 +259,7 @@ class ConversationSession(
+         initializationMutex.withLock {
+             writeMutex.withLock {
+                 write(state.value.takeIf { isInitialized })
+-                synchronized(this) {
++                stateMutex.withLock {
+                     _state.value = conversation
+                     isInitialized = true
+                     incarnation++
+@@ -295,7 +319,8 @@ class ConversationSession(
+      * 压缩也占任务槽，所以压缩期间同样不会开始。
+      */
+     val canStartNextTurn: Boolean
+-        get() = _generationJob.value == null && !state.value.isAwaitingToolApproval
++        get() = _generationJob.value == null && !state.value.isAwaitingToolApproval &&
++            !state.value.hasUnfinishedPluginRun()
+ 
+ 
+     val isInUse: Boolean
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt
+index ff873f7037c53f290047a450add0e3d746f94371..f22bf7b53e212ecb92a2c1b4388dbc8076d0ca7f 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt
+@@ -124,7 +124,7 @@ fun ChatList(
+                 progress = previewProgress,
+                 scope = scope,
+                 layoutDirection = layoutDirection,
+-                canEnterPreview = { currentConversation.messageNodes.isNotEmpty() },
++                canEnterPreview = { currentConversation.visibleMessageNodes.isNotEmpty() },
+                 isPreviewMode = { currentPreviewMode },
+                 onPreviewModeChange = { currentOnPreviewModeChange(it) },
+             ),
+@@ -294,7 +294,7 @@ private fun ChatListNormal(
+             .flatMap { it.models }
+             .associateBy { it.id }
+     }
+-    val lastMessageIndex = conversation.messageNodes.lastIndex
++    val lastMessageIndex = conversation.visibleMessageNodes.lastIndex
+ 
+     Box(
+         modifier = Modifier
+@@ -307,8 +307,8 @@ private fun ChatListNormal(
+                     // println("is bottom = ${visibleItemsInfo.isAtBottom()}, scroll = ${state.isScrollInProgress}, can_scroll = ${state.canScrollForward}, loading = $loading")
+                     if (!state.isScrollInProgress && loadingState) {
+                         if (visibleItemsInfo.isAtBottom()) {
+-                            state.requestScrollToItem(conversationUpdated.messageNodes.lastIndex + 10)
+-                            // Log.i(TAG, "ChatList: scroll to ${conversationUpdated.messageNodes.lastIndex}")
++                            state.requestScrollToItem(conversationUpdated.visibleMessageNodes.lastIndex + 10)
++                            // Log.i(TAG, "ChatList: scroll to ${conversationUpdated.visibleMessageNodes.lastIndex}")
+                         }
+                     }
+                 }
+@@ -343,7 +343,7 @@ private fun ChatListNormal(
+                     .hazeSource(state = hazeState),
+             ) {
+             itemsIndexed(
+-                items = conversation.messageNodes,
++                items = conversation.visibleMessageNodes,
+                 key = { index, item -> item.id },
+             ) { index, node ->
+                 Column {
+@@ -380,8 +380,8 @@ private fun ChatListNormal(
+                             onShare = {
+                                 // 默认选中从第一条到这一条
+                                 selectionState.start(
+-                                    conversation.messageNodes.map { it.id }
+-                                        .subList(0, conversation.messageNodes.indexOf(node) + 1)
++                                    conversation.visibleMessageNodes.map { it.id }
++                                        .subList(0, conversation.visibleMessageNodes.indexOf(node) + 1)
+                                 )
+                             },
+                             onUpdate = {
+@@ -463,10 +463,10 @@ private fun ChatListNormal(
+             // 完成选择
+             ChatSelectionToolbar(
+                 state = selectionState,
+-                allIds = conversation.messageNodes.map { it.id },
++                allIds = conversation.visibleMessageNodes.map { it.id },
+                 onConfirm = {
+                     selectionState.selecting = false
+-                    if (conversation.messageNodes.any { it.id in selectedItems }) {
++                    if (conversation.visibleMessageNodes.any { it.id in selectedItems }) {
+                         showExportSheet = true
+                     }
+                 },
+@@ -483,7 +483,7 @@ private fun ChatListNormal(
+                     selectedItems.clear()
+                 },
+                 conversation = conversation,
+-                selectedMessages = conversation.messageNodes.filter { it.id in selectedItems }
++                selectedMessages = conversation.visibleMessageNodes.filter { it.id in selectedItems }
+                     .map { it.currentMessage }
+             )
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatListPreview.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatListPreview.kt
+index 5566dcfedcc6bba2239df52f1e4acf9fef491fa0..8efa0b616c9f60f3d4f38c5b2ac60a06aa4b2fbc 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatListPreview.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatListPreview.kt
+@@ -142,7 +142,7 @@ internal fun ChatListPreview(
+ 
+     // 长对话里逐条做正则清洗很慢，放到后台算；没算完时为 null。
+     // 生成中节点每个 chunk 都在变，conflate 掉中间状态，只算最新的
+-    val nodes by rememberUpdatedState(conversation.messageNodes)
++    val nodes by rememberUpdatedState(conversation.visibleMessageNodes)
+     val loadedRounds by produceState<List<PreviewRound>?>(initialValue = null) {
+         snapshotFlow { nodes }
+             .conflate()
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt
+index cf080cb4e2b9602824f443edba4ab8aaaefc51c4..ad3eabfa6b8734241c7c1df2f1d1f074d34dafcb 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt
+@@ -198,10 +198,10 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
+     }
+ 
+     val chatListState = rememberLazyListState()
+-    LaunchedEffect(nodeId, conversation.messageNodes.size) {
+-        if (!vm.chatListInitialized && conversation.messageNodes.isNotEmpty()) {
++    LaunchedEffect(nodeId, conversation.visibleMessageNodes.size) {
++        if (!vm.chatListInitialized && conversation.visibleMessageNodes.isNotEmpty()) {
+             if (nodeId != null) {
+-                val index = conversation.messageNodes.indexOfFirst { it.id == nodeId }
++                val index = conversation.visibleMessageNodes.indexOfFirst { it.id == nodeId }
+                 if (index >= 0) {
+                     chatListState.scrollToItem(index)
+                 }
+@@ -373,7 +373,7 @@ private fun ChatPageContent(
+                     onExport = {
+                         // 跟消息上的分享一样进入多选，默认全选，用户可以再挑
+                         previewMode = false
+-                        selectionState.start(conversation.messageNodes.map { it.id })
++                        selectionState.start(conversation.visibleMessageNodes.map { it.id })
+                     },
+                     onDelete = {
+                         showDeleteConfirm = true
+@@ -678,7 +678,7 @@ private fun TopBar(
+             val editTitleWarning = stringResource(R.string.chat_page_edit_title_warning)
+             Surface(
+                 onClick = {
+-                    if (conversation.messageNodes.isNotEmpty()) {
++                    if (conversation.visibleMessageNodes.isNotEmpty()) {
+                         titleState.open(conversation.title)
+                     } else {
+                         toaster.show(editTitleWarning, type = ToastType.Warning)
+@@ -723,7 +723,7 @@ private fun TopBar(
+                     Icon(HugeIcons.MessageAdd01, "New Message")
+                 }
+                 ChatPageMenu(
+-                    enabled = conversation.messageNodes.isNotEmpty(),
++                    enabled = conversation.visibleMessageNodes.isNotEmpty(),
+                     onShowOverview = onShowOverview,
+                     onExport = onExport,
+                     onDelete = onDelete,
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt
+index 153eb06302023b12605aeed7d80d027dd9c9ec73..89f66e606161b42ddb9c1a5da60eafe3bed53a2b 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt
+@@ -163,7 +163,7 @@ class ChatVM(
+     suspend fun stopBackgroundTask(id: String) = backgroundShellManager.stop(id)
+ 
+     // 生成完成
+-    val generationDoneFlow: SharedFlow<Uuid> = chatService.generationDoneFlow
++    val generationDoneFlow: SharedFlow<me.rerere.rikkahub.plugins.CompletedRunReply> = chatService.generationDoneFlow
+ 
+     // MCP管理器
+     val mcpManager = chatService.mcpManager
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/TTSAutoPlay.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/TTSAutoPlay.kt
+index 1dff3d4cec68f7d7496bfa6ad3297a6cec71a0c5..4e805cd01d1aaae791f567a4028a6fcfcae6b547 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/TTSAutoPlay.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/TTSAutoPlay.kt
+@@ -18,13 +18,13 @@ fun TTSAutoPlay(vm: ChatVM, setting: Settings, conversation: Conversation) {
+     val currentConversation by rememberUpdatedState(conversation)
+     val updatedSetting by rememberUpdatedState(setting)
+     LaunchedEffect(Unit) {
+-        vm.generationDoneFlow.collect { conversationId ->
+-            if (conversationId == currentConversation.id &&
++        vm.generationDoneFlow.collect { completed ->
++            if (completed.conversationId == currentConversation.id &&
+                 !vm.voiceSession.state.value.isActive &&
+                 updatedSetting.displaySetting.autoPlayTTSAfterGeneration
+             ) {
+-                val lastMessage = currentConversation.currentMessages.lastOrNull()
+-                if (lastMessage != null && lastMessage.role == MessageRole.ASSISTANT) {
++                val lastMessage = completed.message
++                if (lastMessage.role == MessageRole.ASSISTANT) {
+                     val text = lastMessage.toText()
+                     var textToSpeak = text
+                     if (updatedSetting.displaySetting.ttsOnlyReadQuoted) {
+diff --git a/app/src/test/java/me/rerere/rikkahub/service/ConversationSessionManagerTest.kt b/app/src/test/java/me/rerere/rikkahub/service/ConversationSessionManagerTest.kt
+index 7f1f75828fa3e95d65ebbbb35114fbec7cf55311..f3e6dffe5895b450d5e8554a56f406bda8ce5c5b 100644
+--- a/app/src/test/java/me/rerere/rikkahub/service/ConversationSessionManagerTest.kt
++++ b/app/src/test/java/me/rerere/rikkahub/service/ConversationSessionManagerTest.kt
+@@ -47,7 +47,7 @@ class ConversationSessionManagerTest {
+             val first = rig.manager.getOrCreate(id)
+             val other = rig.manager.getOrCreate(Uuid.random())
+             runBlocking { first.initialize(load = { Conversation.ofId(id) }) }
+-            first.update { it.copy(title = "first") }
++            runBlocking { first.update { it.copy(title = "first") } }
+             assertSame(first, rig.manager.getOrCreate(id))
+             assertNotSame(first, other)
+             assertEquals("", other.state.value.title)
