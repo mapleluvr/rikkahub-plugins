@@ -71,6 +71,34 @@ class PluginRuntimeTest {
         }
 
     @Test(timeout = 15_000)
+    fun nestedSameInstanceCallIsRejectedWithoutRevokingTheCaller() = runBlocking {
+        lateinit var runtime: PluginRuntime
+        runtime = PluginRuntime {
+            val error = runCatching { runtime.evaluate("'nested'") }.exceptionOrNull()
+            check(error is IllegalArgumentException && error.message!!.contains("cycle"))
+            "cycle rejected"
+        }
+        try {
+            assertEquals("cycle rejected", runtime.evaluate("await hostRequest('nested')"))
+            assertEquals("still alive", runtime.evaluate("'still alive'"))
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test(timeout = 15_000)
+    fun acyclicCrossInstanceCallCompletes() = runBlocking {
+        val child = PluginRuntime { "child response" }
+        val parent = PluginRuntime { child.evaluate("await hostRequest('child')") }
+        try {
+            assertEquals("child response", parent.evaluate("await hostRequest('parent')"))
+        } finally {
+            parent.close()
+            child.close()
+        }
+    }
+
+    @Test(timeout = 15_000)
     fun keepsRegisteredCallbacksAcrossSuccessfulCalls() =
         runBlocking {
             val runtime = PluginRuntime { request -> "reply:$request" }

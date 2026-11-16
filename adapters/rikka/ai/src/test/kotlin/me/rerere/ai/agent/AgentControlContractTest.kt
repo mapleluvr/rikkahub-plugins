@@ -198,7 +198,10 @@ class AgentControlContractTest {
         val result = runAgent(request(control).copy(
             messages = listOf(UIMessage.user("go"), message),
             completedSteps = 1,
-            resumeCursor = AgentCursor(AgentBoundary.AfterTools, 1)
+            resumeCursor = AgentCursor(
+                AgentBoundary.AfterTools, 1, messageId = message.id.toString(),
+                toolBatch = listOf(AgentToolBinding(tool.toolCallId, tool.toolName, tool.input))
+            )
         ), hooks).toList().last() as AgentEvent.Yielded
         assertEquals(listOf(AgentBoundary.AfterTools), visited)
         assertEquals(AgentBoundary.AfterTools, result.cursor.boundary)

@@ -116,6 +116,14 @@
     {
       "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionRunStoreTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionRunStoreTest.kt"
+    },
+    {
+      "from": "adapters/rikka/ai/src/test/kotlin/me/rerere/ai/agent/AgentReviewRegressionTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/ai/src/test/kotlin/me/rerere/ai/agent/AgentReviewRegressionTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/AgentRunControlIntegrationTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/AgentRunControlIntegrationTest.kt"
     }
   ]
 }
