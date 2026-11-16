@@ -147,7 +147,10 @@ class SessionOperationDispatcherTest {
             "summary"
         }
         val dispatcher = SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> enabled }
-        val work = async { runCatching { dispatcher.execute(session, source.operationCall(feature.operation, feature.input())) } }
+        val work =
+            async {
+                runCatching { dispatcher.execute(session, source.operationCall(feature.operation, feature.input())) }
+            }
         entered.await()
         enabled = false
         release.complete(Unit)
@@ -161,10 +164,17 @@ class SessionOperationDispatcherTest {
         val store = FakeConversationStore(source)
         val session = session(source, store)
         var calls = 0
-        val feature = BuiltinContextFeature { _, _, _, _ -> calls++; "summary" }
+        val feature = BuiltinContextFeature { _, _, _, _ ->
+            calls++
+            "summary"
+        }
         val call = source.operationCall(feature.operation, feature.input())
-        session.update { it.copy(messageNodes = emptyList()).updateCurrentMessages(listOf(UIMessage.user("other branch"))) }
-        assertTrue(runCatching { SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }.execute(session, call) }.isFailure)
+        session.update {
+            it.copy(messageNodes = emptyList()).updateCurrentMessages(listOf(UIMessage.user("other branch")))
+        }
+        assertTrue(runCatching {
+            SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }.execute(session, call)
+        }.isFailure)
         assertEquals(0, calls)
     }
 
@@ -175,9 +185,14 @@ class SessionOperationDispatcherTest {
         val session = session(source, store)
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val feature = BuiltinContextFeature { _, _, _, _ -> entered.complete(Unit); release.await(); "summary" }
+        val feature = BuiltinContextFeature { _, _, _, _ ->
+            entered.complete(Unit)
+            release.await()
+            "summary"
+        }
         val call = source.operationCall(feature.operation, feature.input())
-        val work = async { SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }.execute(session, call) }
+        val work =
+            async { SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> true }.execute(session, call) }
         entered.await()
         val tail = UIMessage.user("tail")
         session.update { it.updateCurrentMessages(it.currentMessages + tail) }

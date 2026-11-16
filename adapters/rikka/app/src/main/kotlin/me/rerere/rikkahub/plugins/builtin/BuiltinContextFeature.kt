@@ -11,7 +11,6 @@ import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.agent.AgentBoundary
 import me.rerere.ai.agent.AgentBoundaryContext
-import me.rerere.rikkahub.plugins.BoundaryOperation
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
@@ -20,6 +19,7 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.insertContextCheckpoint
 import me.rerere.rikkahub.data.model.lastContextTokens
+import me.rerere.rikkahub.plugins.BoundaryOperation
 import me.rerere.rikkahub.plugins.ConversationOperation
 import me.rerere.rikkahub.plugins.PreparedConversationOperation
 import me.rerere.rikkahub.plugins.executionLedger
@@ -40,7 +40,16 @@ class BuiltinContextFeature(
     private val summarize: suspend (Conversation, List<UIMessage>, String, suspend () -> Unit) -> String,
 ) {
     val operation =
-        ConversationOperation(ID, "压缩上下文", LEASE, setOf("context.write", "model.request"), continueRunAfterFailure = true) { source, input ->
+        ConversationOperation(
+            ID,
+            "压缩上下文",
+            LEASE,
+            setOf("context.write", "model.request"),
+            continueRunAfterFailure = true
+        ) {
+                source,
+                input
+            ->
             prepare(source, JsonInstant.decodeFromJsonElement<CompactInput>(input))
         }
 

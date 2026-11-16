@@ -5,12 +5,7 @@ import kotlinx.serialization.json.JsonElement
 
 /** Host-issued identity. The transport must bind it to an authenticated principal. */
 @Serializable
-data class RunRef(
-    val conversationId: String,
-    val branchId: String,
-    val runId: String,
-    val incarnation: Long = 0
-)
+data class RunRef(val conversationId: String, val branchId: String, val runId: String, val incarnation: Long = 0)
 
 @Serializable
 data class BranchRef(val conversationId: String, val branchId: String)

@@ -1,9 +1,9 @@
 package me.rerere.rikkahub.plugins
 
 import dev.rikkahub.plugins.protocol.AttemptStatus
+import dev.rikkahub.plugins.protocol.BranchRef
 import dev.rikkahub.plugins.protocol.OperationCall
 import dev.rikkahub.plugins.protocol.OperationResult
-import dev.rikkahub.plugins.protocol.BranchRef
 import dev.rikkahub.plugins.protocol.PackageLease
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -14,8 +14,8 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.selectBranch
-import me.rerere.rikkahub.service.ConversationStore
 import me.rerere.rikkahub.service.ConversationSession
+import me.rerere.rikkahub.service.ConversationStore
 import me.rerere.rikkahub.service.FakeConversationStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -100,7 +100,9 @@ class SessionOperationStoreTest {
                 release.await()
                 return { it }
             }
-            override suspend fun write(previous: Conversation?, current: Conversation) { saves++ }
+            override suspend fun write(previous: Conversation?, current: Conversation) {
+                saves++
+            }
         }
         val session = ConversationSession(initial.id, initial, this, store, {})
         session.initialize({ initial })

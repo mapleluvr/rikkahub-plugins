@@ -34,7 +34,8 @@ object RunControl {
         if (state.status != RunStatus.ACTIVE) {
             state
         } else {
-            state.copy(status = RunStatus.CANCELLED, revision = state.revision + 1, frameRevision = state.frameRevision + 1)
+            state.copy(status = RunStatus.CANCELLED, revision = state.revision + 1, frameRevision =
+                state.frameRevision + 1)
         }
 
     fun admit(state: RunState, step: Int, preparedFrameRevision: Long): Admission {

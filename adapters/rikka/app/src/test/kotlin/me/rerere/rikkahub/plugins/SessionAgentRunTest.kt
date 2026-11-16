@@ -166,13 +166,24 @@ class SessionAgentRunTest {
         val store = FakeConversationStore(initial)
         val session = open(initial, store)
         var summaries = 0
-        val feature = me.rerere.rikkahub.plugins.builtin.BuiltinContextFeature { _, _, _, _ -> summaries++; "summary" }
+        val feature = me.rerere.rikkahub.plugins.builtin.BuiltinContextFeature { _, _, _, _ ->
+            summaries++
+            "summary"
+        }
         val provider = ScriptedProvider().apply { firstTool = true }
         val run = SessionAgentRun.open(session, initial.currentMessages) { point, _ ->
-            if (point.cursor.boundary == AgentBoundary.AfterTools) BoundaryOperation(feature.operation, feature.input(), "operation") else null
+            if (point.cursor.boundary ==
+                AgentBoundary.AfterTools) {
+                BoundaryOperation(feature.operation, feature.input(), "operation")
+            } else {
+                null
+            }
         }
         val tool = Tool(name = "effect", description = "effect", execute = { listOf(UIMessagePart.Text("done")) })
-        runAgent(run.bind(request(provider, initial.currentMessages).copy(tools = listOf(tool)), Uuid.random()), run.hooks(hooks)).collect(run::accept)
+        runAgent(
+            run.bind(request(provider, initial.currentMessages).copy(tools = listOf(tool)), Uuid.random()),
+            run.hooks(hooks)
+        ).collect(run::accept)
         val restored = open(initial, store)
         val pending = SessionAgentRun.open(restored, restored.state.value.currentMessages) { _, _ -> null }
         assertEquals(run.ref, pending.ref)
@@ -186,7 +197,10 @@ class SessionAgentRunTest {
         assertNull(recovered.pending)
         assertEquals(1, summaries)
         assertTrue(afterAdoption.state.value.executionLedger().runs.getValue(run.ref.runId).state.gates.isEmpty())
-        runAgent(recovered.bind(request(provider, afterAdoption.state.value.currentMessages), Uuid.random()), recovered.hooks(hooks)).collect(recovered::accept)
+        runAgent(
+            recovered.bind(request(provider, afterAdoption.state.value.currentMessages), Uuid.random()),
+            recovered.hooks(hooks)
+        ).collect(recovered::accept)
         val final = store.persisted!!.executionLedger().runs.getValue(run.ref.runId)
         assertEquals(2, final.state.stepsUsed)
         assertEquals(2, provider.calls)

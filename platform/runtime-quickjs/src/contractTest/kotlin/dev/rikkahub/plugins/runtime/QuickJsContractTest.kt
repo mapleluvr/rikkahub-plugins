@@ -59,7 +59,9 @@ class QuickJsContractTest {
                 assertEquals(
                     "reply:first,reply:second",
                     withTimeout(3_000) {
-                        js.evaluate<String>("await Promise.all([hostRequest('first'), hostRequest('second')]).then(x => x.join(','))")
+                        js.evaluate<String>(
+                            "await Promise.all([hostRequest('first'), hostRequest('second')]).then(x => x.join(','))"
+                        )
                     },
                 )
                 val results =

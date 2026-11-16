@@ -9,22 +9,19 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
-import kotlin.coroutines.AbstractCoroutineContextElement
-import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 
 /**
  * One persistent plugin instance. The owner closes it from outside its host callbacks.
  * A failed/cancelled evaluation revokes the instance; callers rebuild from committed state.
  * Host callbacks must cooperate with cancellation and bound their external operations.
  */
-class PluginRuntime(
-    private val timeoutMillis: Long = 10_000,
-    private val hostRequest: suspend (String) -> String,
-) {
+class PluginRuntime(private val timeoutMillis: Long = 10_000, private val hostRequest: suspend (String) -> String,) {
     init {
         require(timeoutMillis > 0)
     }
@@ -35,6 +32,7 @@ class PluginRuntime(
     private val calls = Mutex()
     private val closing = Mutex()
     private var closed = false
+
     @Volatile private var activeChain: RuntimeCallChain? = null
     private val engine =
         QuickJs.create(Dispatchers.Default).apply {
@@ -50,7 +48,9 @@ class PluginRuntime(
             val chain = checkNotNull(activeChain) { "RPC has no active evaluation" }
             owned {
                 withContext(chain) {
-                    hostRequest(request).also { require(it.length <= MAX_MESSAGE_CHARS) { "Host response exceeds size limit" } }
+                    hostRequest(request).also {
+                        require(it.length <= MAX_MESSAGE_CHARS) { "Host response exceeds size limit" }
+                    }
                 }
             }.await()
         }

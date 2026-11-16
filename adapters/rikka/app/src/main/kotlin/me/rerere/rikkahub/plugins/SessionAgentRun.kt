@@ -1,7 +1,6 @@
 package me.rerere.rikkahub.plugins
 
 import dev.rikkahub.plugins.core.RunControl
-
 import dev.rikkahub.plugins.protocol.*
 import me.rerere.ai.agent.*
 import me.rerere.ai.core.MessageRole
@@ -57,7 +56,10 @@ class SessionAgentRun private constructor(
                         )
                     store.update(ref) {
                         it.copy(
-                            state = RunControl.addGate(it.state, Gate(operation.commandId, GateKind.OPERATION_DEPENDENCY)),
+                            state = RunControl.addGate(
+                                it.state,
+                                Gate(operation.commandId, GateKind.OPERATION_DEPENDENCY)
+                            ),
                             pendingOperation = pending,
                         )
                     }
@@ -99,7 +101,11 @@ class SessionAgentRun private constructor(
         val current = session.state.value
         val sources = current.pluginSources().associateBy { it.id }
         return if (current.currentMessages.take(preparedIds.size).map { it.id.toString() } != preparedIds ||
-            preparedSources.any { sources[it.id] != it }) "Request source or selected branch changed" else null
+            preparedSources.any { sources[it.id] != it }) {
+            "Request source or selected branch changed"
+        } else {
+            null
+        }
     }
 
     suspend fun accept(event: AgentEvent) {
@@ -180,13 +186,14 @@ class SessionAgentRun private constructor(
             policy: (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
         ): SessionAgentRun {
             val last = history.lastOrNull()
-            val branch = history.lastOrNull { it.role == MessageRole.USER && !it.isContextCheckpoint }?.id?.toString() ?: "draft"
+            val branch =
+                history.lastOrNull { it.role == MessageRole.USER && !it.isContextCheckpoint }?.id?.toString() ?: "draft"
             val ledger = session.state.value.executionLedger()
             val previous = ledger.runs.values.singleOrNull {
                 it.state.status == RunStatus.ACTIVE && (
                     (it.messageId != null && it.messageId == last?.id?.toString()) ||
-                    ((it.messageId == null || it.pendingOperation != null) && it.state.ref.branchId == branch)
-                )
+                        ((it.messageId == null || it.pendingOperation != null) && it.state.ref.branchId == branch)
+                    )
             }
             val store = SessionRunStore(session)
             val saved = if (previous != null) {

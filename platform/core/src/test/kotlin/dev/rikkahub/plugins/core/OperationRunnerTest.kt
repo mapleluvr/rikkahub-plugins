@@ -1,16 +1,16 @@
 package dev.rikkahub.plugins.core
 
 import dev.rikkahub.plugins.protocol.ArtifactDraft
+import dev.rikkahub.plugins.protocol.BranchRef
 import dev.rikkahub.plugins.protocol.ContextItem
+import dev.rikkahub.plugins.protocol.Gate
+import dev.rikkahub.plugins.protocol.GateKind
 import dev.rikkahub.plugins.protocol.OperationCall
 import dev.rikkahub.plugins.protocol.OperationResult
+import dev.rikkahub.plugins.protocol.PackageLease
 import dev.rikkahub.plugins.protocol.ProjectionPlan
 import dev.rikkahub.plugins.protocol.RunRef
 import dev.rikkahub.plugins.protocol.RunState
-import dev.rikkahub.plugins.protocol.Gate
-import dev.rikkahub.plugins.protocol.GateKind
-import dev.rikkahub.plugins.protocol.BranchRef
-import dev.rikkahub.plugins.protocol.PackageLease
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -25,7 +25,8 @@ import org.junit.Test
 
 class OperationRunnerTest {
     private val lease = PackageLease("test", "package", 1)
-    private val call = OperationCall("request", "test/report", BranchRef("conversation", "branch"), JsonPrimitive("input"), lease)
+    private val call =
+        OperationCall("request", "test/report", BranchRef("conversation", "branch"), JsonPrimitive("input"), lease)
 
     @Test
     fun operationsCanReduceWithoutModelWorkOrPublishReportsWithoutProjection() = runTest {

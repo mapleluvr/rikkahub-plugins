@@ -184,7 +184,9 @@ class AgentControlContractTest {
     @Test
     fun afterToolsWaitIsRecheckedBeforePreparingAnotherRequest() = runTest {
         val tool = UIMessagePart.Tool(
-            toolCallId = "one", toolName = "one", input = "{}",
+            toolCallId = "one",
+            toolName = "one",
+            input = "{}",
             output = listOf(UIMessagePart.Text("settled"))
         )
         val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))
@@ -199,7 +201,9 @@ class AgentControlContractTest {
             messages = listOf(UIMessage.user("go"), message),
             completedSteps = 1,
             resumeCursor = AgentCursor(
-                AgentBoundary.AfterTools, 1, messageId = message.id.toString(),
+                AgentBoundary.AfterTools,
+                1,
+                messageId = message.id.toString(),
                 toolBatch = listOf(AgentToolBinding(tool.toolCallId, tool.toolName, tool.input))
             )
         ), hooks).toList().last() as AgentEvent.Yielded
