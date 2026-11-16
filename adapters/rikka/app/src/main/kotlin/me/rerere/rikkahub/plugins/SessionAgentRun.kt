@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.plugins
 
-import dev.rikkahub.plugins.core.RunControl
 import dev.rikkahub.plugins.protocol.*
 import me.rerere.ai.agent.*
 import me.rerere.ai.core.MessageRole
@@ -75,6 +74,11 @@ class SessionAgentRun private constructor(
             resumeCursor = cursor,
             control = control,
         )
+    }
+
+    fun hooks(base: AgentHooks): AgentHooks = object : AgentHooks by base {
+        override suspend fun prepareStep(messages: List<UIMessage>): StepRequest =
+            base.prepareStep(session.state.value.projectedContext(messages))
     }
 
     suspend fun accept(event: AgentEvent) {

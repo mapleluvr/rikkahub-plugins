@@ -57,7 +57,10 @@ class SessionOperationDispatcher(
         require(call.target.conversationId == snapshot.id.toString())
         snapshot.executionLedger().operations[call.id]?.let { prior ->
             require(prior.call == call) { "Command identity reused" }
-            if (prior.status == AttemptStatus.SETTLED) return checkNotNull(prior.result)
+            if (prior.status == AttemptStatus.SETTLED) {
+                session.flush()
+                return checkNotNull(prior.result)
+            }
             check(prior.status == AttemptStatus.PREPARED) { "Previous attempt needs reconciliation" }
         }
         val prepared = definition.prepare(snapshot, call.input)
@@ -94,6 +97,7 @@ class SessionOperationDispatcher(
             currentCoroutineContext().ensureActive()
             store.settle(call, attempt, result) { current ->
                 validate(current)
+                current.validateOperationOutput(result, prepared.sources, definition.capabilities)
                 prepared.adopt(current, result)
             }
             return result
