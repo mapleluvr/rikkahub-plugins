@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <service
+            android:name="dev.rikkahub.plugins.runtime.fixture.RuntimeProbeService"
+            android:exported="false"
+            android:isolatedProcess="true"
+            android:process=":runtime_probe" />
+        <activity
+            android:name="dev.rikkahub.plugins.runtime.fixture.RuntimeProbeActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
+</manifest>

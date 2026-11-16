@@ -16,6 +16,22 @@
     {
       "from": "platform/runtime-quickjs/src/contractTest/kotlin/dev/rikkahub/plugins/runtime/QuickJsContractTest.kt",
       "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/contractTest/kotlin/dev/rikkahub/plugins/runtime/QuickJsContractTest.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/androidTest/AndroidManifest.xml",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/AndroidManifest.xml"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/RuntimeLifecycleTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/RuntimeLifecycleTest.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/fixture/RuntimeProbeActivity.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/fixture/RuntimeProbeActivity.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/fixture/RuntimeProbeService.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/fixture/RuntimeProbeService.kt"
     }
   ]
 }

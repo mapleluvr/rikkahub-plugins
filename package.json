@@ -11,5 +11,8 @@
   "scripts": {
     "test": "node --test tools/hostctl/test/*.test.mjs",
     "hostctl": "node tools/hostctl/cli.mjs"
+  },
+  "devDependencies": {
+    "saxes": "6.0.0"
   }
 }
