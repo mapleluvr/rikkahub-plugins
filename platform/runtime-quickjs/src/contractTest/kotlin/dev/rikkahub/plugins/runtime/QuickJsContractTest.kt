@@ -15,7 +15,6 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.concurrent.atomic.AtomicBoolean
 
 /** Same consumer contract on the desktop JNI library and the Android AAR. */
 class QuickJsContractTest {
@@ -96,17 +95,17 @@ class QuickJsContractTest {
         }
 
     @Test(timeout = 15_000)
-    fun cancelledRpcCannotCompleteAfterRuntimeDisposal() =
+    fun rawCloseRequestsAsynchronousHostCleanup() =
         runBlocking {
             val js = runtime()
             val entered = CompletableDeferred<Unit>()
-            val released = AtomicBoolean(false)
+            val released = CompletableDeferred<Unit>()
             js.asyncFunction("hostRequest") {
                 entered.complete(Unit)
                 try {
                     awaitCancellation()
                 } finally {
-                    released.set(true)
+                    released.complete(Unit)
                 }
             }
             try {
@@ -114,7 +113,7 @@ class QuickJsContractTest {
                 withTimeout(3_000) { entered.await() }
                 withTimeout(3_000) { call.cancelAndJoin() }
                 js.close()
-                assertTrue(released.get())
+                withTimeout(3_000) { released.await() }
                 assertTrue(js.isClosed)
                 assertTrue(runCatching { js.evaluate<Any?>("1") }.isFailure)
             } finally {

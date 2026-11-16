@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "imports": [
     {
+      "from": "platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/PluginRuntime.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/PluginRuntime.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/contractTest/kotlin/dev/rikkahub/plugins/runtime/PluginRuntimeTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/contractTest/kotlin/dev/rikkahub/plugins/runtime/PluginRuntimeTest.kt"
+    },
+    {
       "from": "platform/runtime-quickjs/build.gradle.kts",
       "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/build.gradle.kts"
     },
