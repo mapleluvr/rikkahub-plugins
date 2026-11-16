@@ -148,6 +148,10 @@
     {
       "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionOperationDispatcherTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionOperationDispatcherTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/ProjectionProviderContractTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/ProjectionProviderContractTest.kt"
     }
   ]
 }

@@ -7,7 +7,12 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
 import dev.rikkahub.plugins.protocol.PackageLease
 
-data class OperationContext(val call: OperationCall, val attemptId: String, val capabilities: Set<String>)
+data class OperationContext(
+    val call: OperationCall,
+    val attemptId: String,
+    val capabilities: Set<String>,
+    val beforeEffect: suspend () -> Unit = {},
+)
 
 data class OperationDefinition(
     val id: String,
@@ -38,7 +43,10 @@ class OperationRunner(definitions: List<OperationDefinition>) {
         return withTimeout(timeoutMillis) {
             validate(call)
             currentCoroutineContext().ensureActive()
-            val result = operation.execute(OperationContext(call, attemptId, granted.toSet()))
+            val result = operation.execute(OperationContext(call, attemptId, granted.toSet()) {
+                currentCoroutineContext().ensureActive()
+                validate(call)
+            })
             currentCoroutineContext().ensureActive()
             validate(call)
             result

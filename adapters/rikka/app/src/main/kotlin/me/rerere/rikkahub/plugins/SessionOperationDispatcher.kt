@@ -46,6 +46,8 @@ class SessionOperationDispatcher(
         require(registry.size == definitions.size) { "Duplicate operation registration" }
     }
 
+    fun label(call: OperationCall): String = registry[call.type to call.handler]?.title ?: call.type
+
     suspend fun execute(
         session: ConversationSession,
         call: OperationCall,

@@ -5,7 +5,6 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.model.Conversation
-import me.rerere.rikkahub.data.model.editMessage
 import me.rerere.rikkahub.plugins.builtin.BuiltinContextFeature
 import me.rerere.rikkahub.plugins.builtin.CompactInput
 import me.rerere.rikkahub.service.ConversationSession
@@ -21,7 +20,7 @@ class SessionOperationDispatcherTest {
         val store = FakeConversationStore(source)
         val session = session(source, store)
         var calls = 0
-        val feature = BuiltinContextFeature { _, messages, _ ->
+        val feature = BuiltinContextFeature { _, messages, _, _ ->
             calls++
             assertEquals(source.currentMessages, messages)
             assertEquals(AttemptStatus.RUNNING, store.persisted!!.executionLedger().operations.values.single().status)
@@ -48,7 +47,7 @@ class SessionOperationDispatcherTest {
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             var enabled = true
-            val feature = BuiltinContextFeature { _, _, _ ->
+            val feature = BuiltinContextFeature { _, _, _, _ ->
                 entered.complete(Unit)
                 release.await()
                 "late summary"
@@ -76,7 +75,7 @@ class SessionOperationDispatcherTest {
         val session = session(source, store)
         val entered = CompletableDeferred<Unit>()
         var drained = false
-        val feature = BuiltinContextFeature { _, _, _ ->
+        val feature = BuiltinContextFeature { _, _, _, _ ->
             entered.complete(Unit)
             try {
                 awaitCancellation()
@@ -100,7 +99,7 @@ class SessionOperationDispatcherTest {
         val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
         val store = FakeConversationStore(source)
         val session = session(source, store)
-        val feature = BuiltinContextFeature { _, _, _ -> error("disabled model call") }
+        val feature = BuiltinContextFeature { _, _, _, _ -> error("disabled model call") }
         val dispatcher = SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> false }
         assertTrue(runCatching {
             dispatcher.execute(session, source.operationCall(feature.operation, feature.input()))
@@ -129,6 +128,31 @@ class SessionOperationDispatcherTest {
         assertEquals("findings", result.artifacts.single().content.jsonPrimitive.content)
         assertEquals(source.currentMessages, store.persisted!!.currentMessages)
         assertTrue(store.persisted!!.executionLedger().runs.isEmpty())
+    }
+
+    @Test
+    fun revocationDuringPreparationPreventsModelDispatch() = runBlocking {
+        val source = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("source")))
+        val store = FakeConversationStore(source)
+        val session = session(source, store)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var enabled = true
+        var requests = 0
+        val feature = BuiltinContextFeature { _, _, _, beforeEffect ->
+            entered.complete(Unit)
+            release.await()
+            beforeEffect()
+            requests++
+            "summary"
+        }
+        val dispatcher = SessionOperationDispatcher(listOf(feature.operation)) { _, _ -> enabled }
+        val work = async { runCatching { dispatcher.execute(session, source.operationCall(feature.operation, feature.input())) } }
+        entered.await()
+        enabled = false
+        release.complete(Unit)
+        assertTrue(work.await().isFailure)
+        assertEquals(0, requests)
     }
 
     private suspend fun CoroutineScope.session(source: Conversation, store: FakeConversationStore) =

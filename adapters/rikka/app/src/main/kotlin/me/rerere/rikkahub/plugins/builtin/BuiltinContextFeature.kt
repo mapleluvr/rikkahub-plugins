@@ -9,6 +9,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.agent.AgentBoundary
+import me.rerere.ai.agent.AgentBoundaryContext
+import me.rerere.rikkahub.plugins.BoundaryOperation
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
@@ -33,13 +36,29 @@ data class CompactInput(
 )
 
 /** Policy and artifact interpretation for the shipped context feature, outside the execution kernel. */
-class BuiltinContextFeature(private val summarize: suspend (Conversation, List<UIMessage>, String) -> String,) {
+class BuiltinContextFeature(
+    private val summarize: suspend (Conversation, List<UIMessage>, String, suspend () -> Unit) -> String,
+) {
     val operation =
         ConversationOperation(ID, "压缩上下文", LEASE, setOf("context.write", "model.request")) { source, input ->
             prepare(source, JsonInstant.decodeFromJsonElement<CompactInput>(input))
         }
 
     fun input(options: CompactInput = CompactInput()): JsonElement = JsonInstant.encodeToJsonElement(options)
+
+    fun boundaryOperation(
+        boundary: AgentBoundaryContext,
+        conversation: Conversation,
+        settings: Settings,
+        model: Model,
+        allowHistoryRewrite: Boolean,
+        afterOperation: Boolean,
+    ): BoundaryOperation? {
+        if (!allowHistoryRewrite || boundary.cursor.boundary != AgentBoundary.AfterTools) return null
+        return automaticCommand(conversation, settings, model, boundary.message, afterOperation)?.let {
+            BoundaryOperation(operation, input(CompactInput(midTurn = true)), it)
+        }
+    }
 
     fun automaticCommand(
         conversation: Conversation,
@@ -76,8 +95,8 @@ class BuiltinContextFeature(private val summarize: suspend (Conversation, List<U
         val prompt = buildCompressPrompt(input.additionalPrompt, Locale.getDefault().displayName, input.midTurn)
         return PreparedConversationOperation(
             sources = ids.map(stamps::getValue),
-            execute = {
-                val text = summarize(source, selected, prompt)
+            execute = { invocation ->
+                val text = summarize(source, selected, prompt, invocation.beforeEffect)
                 require(text.isNotBlank()) { "摘要为空" }
                 OperationResult(artifacts = listOf(ArtifactDraft("context.summary", JsonPrimitive(text))))
             },

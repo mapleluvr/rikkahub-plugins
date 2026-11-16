@@ -1,5 +1,7 @@
 package me.rerere.rikkahub.plugins
 
+import dev.rikkahub.plugins.core.RunControl
+
 import dev.rikkahub.plugins.protocol.*
 import me.rerere.ai.agent.*
 import me.rerere.ai.core.MessageRole
@@ -22,6 +24,8 @@ class SessionAgentRun private constructor(
     private val store = SessionRunStore(session)
     private var replyNodeId: Uuid = Uuid.random()
     private var preparedFrame = 0L
+    private var preparedSources: List<SourceStamp> = emptyList()
+    private var preparedIds: List<String> = emptyList()
     private var cursor: AgentCursor? = null
     var pending: OperationCall? = null
         private set
@@ -59,9 +63,9 @@ class SessionAgentRun private constructor(
             }
 
             override suspend fun prepareModel(step: Int, attempt: Int): String? =
-                store.admit(ref, step, preparedFrame).reason
+                staleInput() ?: store.admit(ref, step, preparedFrame).reason
 
-            override fun admitModel(step: Int, attempt: Int): String? = blocked()
+            override fun admitModel(step: Int, attempt: Int): String? = blocked() ?: staleInput()
                 ?: if (snapshot().state.frameRevision != preparedFrame) "Prepared request is stale" else null
 
             override suspend fun commit(message: UIMessage) {
@@ -77,8 +81,20 @@ class SessionAgentRun private constructor(
     }
 
     fun hooks(base: AgentHooks): AgentHooks = object : AgentHooks by base {
-        override suspend fun prepareStep(messages: List<UIMessage>): StepRequest =
-            base.prepareStep(session.state.value.projectedContext(messages))
+        override suspend fun prepareStep(messages: List<UIMessage>): StepRequest {
+            val current = session.state.value
+            preparedIds = messages.map { it.id.toString() }
+            val sources = current.pluginSources().associateBy { it.id }
+            preparedSources = preparedIds.map { requireNotNull(sources[it]) { "Request source is missing" } }
+            return base.prepareStep(current.projectedContext(messages))
+        }
+    }
+
+    private fun staleInput(): String? {
+        val current = session.state.value
+        val sources = current.pluginSources().associateBy { it.id }
+        return if (current.currentMessages.take(preparedIds.size).map { it.id.toString() } != preparedIds ||
+            preparedSources.any { sources[it.id] != it }) "Request source or selected branch changed" else null
     }
 
     suspend fun accept(event: AgentEvent) {
@@ -121,18 +137,17 @@ class SessionAgentRun private constructor(
 
     suspend fun operationFinished() {
         val call = checkNotNull(pending)
-        store.resolveGate(ref, call.id)
-        pending = null
-        // A projection may have created a new reply target; the next segment binds it again.
-        cursor = null
         store.update(ref) {
             it.copy(
+                state = RunControl.resolveGate(it.state, call.id),
                 boundary = AgentBoundary.BeforeModel.name,
                 messageId = null,
                 toolBatch = emptyList(),
                 toolCallId = null
             )
         }
+        pending = null
+        cursor = null
     }
 
     suspend fun cancel() = store.cancel(ref)
@@ -158,15 +173,17 @@ class SessionAgentRun private constructor(
             policy: (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
         ): SessionAgentRun {
             val last = history.lastOrNull()
+            val branch = history.lastOrNull { it.role == MessageRole.USER }?.id?.toString() ?: "draft"
             val ledger = session.state.value.executionLedger()
             val previous = ledger.runs.values.singleOrNull {
-                it.state.status == RunStatus.ACTIVE && it.messageId != null && it.messageId == last?.id?.toString()
+                it.state.status == RunStatus.ACTIVE && (
+                    (it.messageId != null && it.messageId == last?.id?.toString()) ||
+                    (it.messageId == null && it.state.ref.branchId == branch)
+                )
             }
             val store = SessionRunStore(session)
             val saved = if (previous != null) {
-                if (last!!.getTools().none {
-                        it.isPending
-                    }) {
+                if (last?.getTools().orEmpty().none { it.isPending }) {
                     store.resolveGate(previous.state.ref, APPROVAL)
                 } else {
                     previous
@@ -179,7 +196,7 @@ class SessionAgentRun private constructor(
                 }
                 val ref = RunRef(
                     session.id.toString(),
-                    history.lastOrNull { it.role == MessageRole.USER }?.id?.toString() ?: "draft",
+                    branch,
                     Uuid.random().toString(),
                     session.incarnation.toLong()
                 )
@@ -197,7 +214,7 @@ class SessionAgentRun private constructor(
                         }
                     )
                     if (saved.state.stepsUsed > saved.nextStep ||
-                        last!!.getTools().any { !it.isExecuted && it.startedAt != null }) {
+                        last?.getTools().orEmpty().any { !it.isExecuted && it.startedAt != null }) {
                         store.addGate(saved.state.ref, Gate("host.recovery", GateKind.PLUGIN_FAULT))
                     }
                 }
