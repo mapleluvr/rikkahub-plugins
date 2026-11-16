@@ -32,6 +32,38 @@
     {
       "from": "platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/fixture/RuntimeProbeService.kt",
       "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/fixture/RuntimeProbeService.kt"
+    },
+    {
+      "from": "platform/core/build.gradle.kts",
+      "to": "vendor/rikka-plugin-host/platform/core/build.gradle.kts"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/ContextProjection.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/ContextProjection.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/OperationRunner.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/OperationRunner.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/RunControl.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/RunControl.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/OperationRunnerTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/OperationRunnerTest.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/RunControlTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/RunControlTest.kt"
+    },
+    {
+      "from": "platform/protocol/build.gradle.kts",
+      "to": "vendor/rikka-plugin-host/platform/protocol/build.gradle.kts"
+    },
+    {
+      "from": "platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/Execution.kt",
+      "to": "vendor/rikka-plugin-host/platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/Execution.kt"
     }
   ]
 }
