@@ -1,21 +1,38 @@
 package me.rerere.rikkahub.plugins
 
-import dev.rikkahub.plugins.protocol.*
+import dev.rikkahub.plugins.protocol.OperationResult
+import dev.rikkahub.plugins.protocol.PackageLease
+import dev.rikkahub.plugins.protocol.ProjectionPlan
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.*
-import me.rerere.ai.agent.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.agent.AgentHooks
+import me.rerere.ai.agent.AgentRequest
+import me.rerere.ai.agent.StepRequest
+import me.rerere.ai.agent.runAgent
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.provider.*
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.Provider
+import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.openai.OpenAIProvider
-import me.rerere.ai.ui.*
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.service.ConversationSession
 import me.rerere.rikkahub.service.ConversationStore
-import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -36,7 +53,9 @@ class ProjectionProviderContractTest {
         val store = object : ConversationStore {
             var persisted: Conversation? = initial
             override suspend fun prepareWrite(): (Conversation) -> Conversation = { it }
-            override suspend fun write(previous: Conversation?, current: Conversation) { persisted = current }
+            override suspend fun write(previous: Conversation?, current: Conversation) {
+                persisted = current
+            }
         }
         val session = ConversationSession(initial.id, initial, this, store, {
         }).also { it.initialize({ store.persisted }) }
@@ -60,7 +79,10 @@ class ProjectionProviderContractTest {
             body = Json.parseToJsonElement(Buffer().also { chain.request().body!!.writeTo(it) }.readUtf8()).jsonObject
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
                 .body(
-                    """{"id":"result","object":"chat.completion","model":"fixture","choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}]}""".toResponseBody(
+                    """
+                    {"id":"result","object":"chat.completion","model":"fixture",
+                     "choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}]}
+                    """.trimIndent().toResponseBody(
                         "application/json".toMediaType()
                     )
                 ).build()

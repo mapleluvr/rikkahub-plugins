@@ -1,26 +1,43 @@
 package me.rerere.rikkahub.plugins
 
-import dev.rikkahub.plugins.protocol.*
+import dev.rikkahub.plugins.protocol.ExecutionLedger
+import dev.rikkahub.plugins.protocol.Gate
+import dev.rikkahub.plugins.protocol.GateKind
+import dev.rikkahub.plugins.protocol.RunCheckpoint
+import dev.rikkahub.plugins.protocol.RunRef
+import dev.rikkahub.plugins.protocol.RunState
+import dev.rikkahub.plugins.protocol.RunStatus
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.provider.*
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.providers.openai.OpenAIProvider
-import me.rerere.ai.ui.*
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.tools.local.LocalToolOption
 import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.model.*
+import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.ConversationConfig
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.web.dto.toDto
-import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.koin.core.context.GlobalContext
 import java.util.concurrent.CopyOnWriteArrayList
@@ -54,7 +71,10 @@ class ApprovalServicePublicationTest {
             }
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
                 .body(
-                    """{"id":"response","object":"chat.completion","model":"approval-fixture","choices":[{"index":0,"message":$message,"finish_reason":"stop"}]}""".toResponseBody(
+                    """
+                    {"id":"response","object":"chat.completion","model":"approval-fixture",
+                     "choices":[{"index":0,"message":$message,"finish_reason":"stop"}]}
+                    """.trimIndent().toResponseBody(
                         "application/json".toMediaType()
                     )
                 ).build()

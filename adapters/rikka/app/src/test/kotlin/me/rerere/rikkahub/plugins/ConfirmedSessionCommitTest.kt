@@ -1,14 +1,30 @@
 package me.rerere.rikkahub.plugins
 
-import dev.rikkahub.plugins.protocol.*
-import kotlinx.coroutines.*
+import dev.rikkahub.plugins.protocol.AttemptStatus
+import dev.rikkahub.plugins.protocol.BranchRef
+import dev.rikkahub.plugins.protocol.OperationCall
+import dev.rikkahub.plugins.protocol.OperationResult
+import dev.rikkahub.plugins.protocol.PackageLease
+import dev.rikkahub.plugins.protocol.RunCheckpoint
+import dev.rikkahub.plugins.protocol.RunRef
+import dev.rikkahub.plugins.protocol.RunState
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonNull
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.service.ConversationSession
 import me.rerere.rikkahub.service.ConversationStore
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
