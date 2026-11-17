@@ -1,4 +1,4 @@
-From afc868d00ee63144fc02005e5432ea8b12cf76c3 Mon Sep 17 00:00:00 2001
+From 5b3dc711eb760d9955617f1cf52d7c5d3dd4de8d Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 15:51:13 +0800
 Subject: [PATCH] Pin conversation plugin selection and provide idle update

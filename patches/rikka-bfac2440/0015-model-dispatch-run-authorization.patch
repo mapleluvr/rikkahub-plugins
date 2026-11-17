@@ -1,0 +1,80 @@
+From 494d9c95150e8285e0021dfd9c28c32231daaeb5 Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Wed, 18 Nov 2026 03:03:30 +0800
+Subject: [PATCH] Separate model reservation from dispatch and bind packaged
+ tools to owning runs
+
+Patch-Id: model-dispatch-run-authorization
+---
+ ai/src/main/java/me/rerere/ai/agent/Agent.kt  |  8 ++++++-
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt | 22 ++++++++++++++-----
+ .../me/rerere/rikkahub/service/ChatService.kt |  2 +-
+ 3 files changed, 25 insertions(+), 7 deletions(-)
+
+diff --git a/ai/src/main/java/me/rerere/ai/agent/Agent.kt b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+index 6eb18ccdc4460dcfcce6acd0029cbdbd8cd42ac5..c26b81280b2e418a99ec73d7e6df448cc71877b5 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/Agent.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+@@ -61,9 +61,15 @@ sealed interface AgentCheckpoint {
+ interface AgentControl {
+     suspend fun decide(context: AgentBoundaryContext): AgentDecision = AgentDecision.Proceed
+ 
+-    /** Persist admission before the final synchronous check; called for every network attempt. */
++    /** Reserve budget and validate preparation; this stage is known not to have dispatched. */
+     suspend fun prepareModel(step: Int, attempt: Int): String? = null
+ 
++    /** Persist dispatch intent after preparation, before the last synchronous admission check. */
++    suspend fun beginModel(step: Int, attempt: Int): String? = null
++
++    /** The loop is still before Provider invocation; release only this provably unused reservation. */
++    suspend fun modelNotDispatched(step: Int, attempt: Int) {}
++
+     /** Persist authoritative state before tool effects or subsequent requests. Never receives stream previews. */
+     suspend fun commit(message: UIMessage) {}
+ 
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index c4452cee13a7a853a10e2cc8b1402cddc4402a4a..d7f0b5a767ffc06140d6ad0cee41cde3269142e4 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -164,11 +164,23 @@ internal class AgentLoop(
+     }
+ 
+     private suspend fun admitModel(attempt: Int) {
+-        val denied =
+-            request.control.prepareModel(logicalSteps, attempt) ?: request.control.admitModel(logicalSteps, attempt)
+-        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+-        denied?.let { token ->
+-            throw AgentYield(cursor(AgentBoundary.BeforeModel), token)
++        try {
++            val denied = request.control.prepareModel(logicalSteps, attempt)
++                ?: request.control.beginModel(logicalSteps, attempt)
++                ?: request.control.admitModel(logicalSteps, attempt)
++            kotlinx.coroutines.currentCoroutineContext().ensureActive()
++            denied?.let { token -> throw AgentYield(cursor(AgentBoundary.BeforeModel), token) }
++        } catch (error: Throwable) {
++            // No Provider method has been invoked. Cancellation during a confirmed write is also known non-dispatch.
++            try {
++                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
++                    request.control.modelNotDispatched(logicalSteps, attempt)
++                }
++            } catch (storage: Throwable) {
++                storage.addSuppressed(error)
++                throw storage
++            }
++            throw error
+         }
+     }
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 921de3b3625ccdb4f6c6b0dab21bbc1b0074d0f4..1a8f1a977e2ef8d793fbd5a39a8f0e02c0b8bd23 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -828,7 +828,7 @@ class ChatService(
+                 )
+             }
+             try {
+-                val pluginTools = pluginHost?.toolDefinitions(run.pluginLeases) {
++                val pluginTools = pluginHost?.toolDefinitions(run.runtimeBinding()) {
+                     session.state.value.runInputMessages(run.ref.runId)
+                 }.orEmpty()
+                 while (true) {

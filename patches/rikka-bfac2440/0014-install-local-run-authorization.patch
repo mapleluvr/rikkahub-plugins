@@ -1,4 +1,4 @@
-From 2a213aec2ad627847e3f95b99f222e98fa1629ca Mon Sep 17 00:00:00 2001
+From 3d8ef5bdf5f4850bc60a9d3ca311cf05a27eb89b Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Wed, 18 Nov 2026 00:00:37 +0800
 Subject: [PATCH] Revalidate owning run packages and exclude installation
