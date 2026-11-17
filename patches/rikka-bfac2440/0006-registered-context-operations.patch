@@ -1,4 +1,4 @@
-From 8ac37e57553e517fd67889c5acd421030c9a7326 Mon Sep 17 00:00:00 2001
+From 69270c2afd56284b86d4b275c6a2564c4317ada3 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 04:55:55 +0800
 Subject: [PATCH] Route default context feature through persistent operations

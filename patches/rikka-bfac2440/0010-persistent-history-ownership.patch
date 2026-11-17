@@ -1,0 +1,136 @@
+From 8e4d1fda0f0d702798d97752ae5e204a34d312b6 Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 10:47:14 +0800
+Subject: [PATCH] Apply shared history ownership to user commands and cold
+ recovery
+
+Patch-Id: persistent-history-ownership
+---
+ .../me/rerere/rikkahub/service/ChatService.kt   | 17 +++++++++--------
+ .../me/rerere/rikkahub/ui/pages/chat/ChatVM.kt  | 13 +++++++++++--
+ .../rikkahub/web/routes/ConversationRoutes.kt   | 15 +++++++++++++--
+ 3 files changed, 33 insertions(+), 12 deletions(-)
+
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index edadd47ac8b5fbf24fc97496c7cc292f3bd25b94..4534d3c4a29e36fa1e0cf342696ccaf04e253cd6 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -372,12 +372,11 @@ class ChatService(
+ 
+     /**
+      * 加载会话后在最新状态上修改并落库。
+-     * 删除消息或切换分支也可能解除工具审批阻塞，落库后重新检查队列。
++     * 用户历史命令与运行所有权在同一确认事务内检查，落库后重新检查队列。
+      */
+     private suspend fun mutate(conversationId: Uuid, transform: (Conversation) -> Conversation): Conversation =
+         withLoadedSession(conversationId) { session ->
+-            session.update(transform)
+-            session.flush().also { dispatchInbox(conversationId) }
++            session.commitHistoryMutation(transform = transform).also { dispatchInbox(conversationId) }
+         }
+ 
+     // 只删上次落库时引用、这次落库不再引用的文件；只在内存里出现过的文件宁可漏删也不误删
+@@ -632,11 +631,8 @@ class ChatService(
+                     previousJob?.join()
+                     session.replyMessageId.value = null
+                     ensureInitialized(session)
+-                    val prepared = session.commitExtension { current ->
+-                        check(!current.hasUnfinishedPluginRun()) {
+-                            "An unfinished run owns this history. Resume or Stop it before regenerating."
+-                        }
+-                        val target = current.getMessageNodeByMessageId(messageId) ?: return@commitExtension current
++                    val prepared = session.commitHistoryMutation(requireIdleRun = true) { current ->
++                        val target = current.getMessageNodeByMessageId(messageId) ?: return@commitHistoryMutation current
+                         if (target.role == MessageRole.USER) {
+                             val index = current.messageNodes.indexOfFirst { it.id == target.id }
+                             current.copy(messageNodes = current.messageNodes.take(index + 1))
+@@ -752,6 +748,11 @@ class ChatService(
+             val activeRun = conversation.executionLedger().runs.values.singleOrNull {
+                 it.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE
+             }
++            if (activeRun != null && MISSING_RUN_HISTORY_GATE in activeRun.state.gates) {
++                session.inbox.pause()
++                appEventBus.emit(AppEvent.ChatGenerationSegmentEnded(conversationId))
++                return TurnResult.Waiting
++            }
+             val runConversation = activeRun?.let { conversation.forInputPath(it.inputIds) } ?: conversation
+             val initialTarget = replyTargetOf(runConversation, regenerateNodeId)
+             // 接着上一条助手消息写时就是它，否则等第一次输出。要在 createContext 之前换掉，
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt
+index 89f66e606161b42ddb9c1a5da60eafe3bed53a2b..a808e41290d56ce947464f6fc564a404410da824 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt
+@@ -41,6 +41,7 @@ import me.rerere.rikkahub.data.model.NodeFavoriteTarget
+ import me.rerere.rikkahub.data.model.getAssistantOf
+ import me.rerere.rikkahub.data.model.getChatModelOf
+ import me.rerere.rikkahub.data.repository.FavoriteRepository
++import me.rerere.rikkahub.plugins.RunHistoryConflict
+ import me.rerere.rikkahub.service.BackgroundShellManager
+ import me.rerere.rikkahub.service.BackgroundShellTask
+ import me.rerere.rikkahub.service.ChatError
+@@ -255,7 +256,11 @@ class ChatVM(
+         analytics?.logEvent("ai_edit_message", null)
+ 
+         viewModelScope.launch {
+-            chatService.editMessage(_conversationId, messageId, parts)
++            try {
++                chatService.editMessage(_conversationId, messageId, parts)
++            } catch (conflict: RunHistoryConflict) {
++                chatService.addError(conflict, _conversationId, title = context.getString(R.string.error_title_operation))
++            }
+         }
+     }
+ 
+@@ -273,7 +278,11 @@ class ChatVM(
+ 
+     fun deleteMessage(message: UIMessage) {
+         viewModelScope.launch {
+-            chatService.deleteMessage(_conversationId, message)
++            try {
++                chatService.deleteMessage(_conversationId, message)
++            } catch (conflict: RunHistoryConflict) {
++                chatService.addError(conflict, _conversationId, title = context.getString(R.string.error_title_operation))
++            }
+         }
+     }
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt b/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+index 5d768a972dabae2f42194baa7cd869f69e720190..9cb567b6d6ad3b27f22a227593329f05f60c2f7a 100644
+--- a/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
++++ b/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+@@ -21,6 +21,7 @@ import me.rerere.rikkahub.data.datastore.findModelById
+ import me.rerere.rikkahub.data.repository.ConversationRepository
+ import me.rerere.rikkahub.data.repository.FolderRepository
+ import me.rerere.rikkahub.service.ChatService
++import me.rerere.rikkahub.plugins.RunHistoryConflict
+ import me.rerere.rikkahub.plugins.hasUnfinishedPluginRun
+ import me.rerere.rikkahub.web.BadRequestException
+ import me.rerere.rikkahub.web.NotFoundException
+@@ -308,7 +309,12 @@ fun Route.conversationRoutes(
+             val request = call.receive<EditMessageRequest>()
+ 
+             chatService.initializeConversation(uuid)
+-            chatService.editMessage(uuid, messageId, request.parts)
++            try {
++                chatService.editMessage(uuid, messageId, request.parts)
++            } catch (conflict: RunHistoryConflict) {
++                call.respond(HttpStatusCode.Conflict, mapOf("error" to conflict.message))
++                return@post
++            }
+ 
+             call.respond(HttpStatusCode.Accepted, mapOf("status" to "accepted"))
+         }
+@@ -331,7 +337,12 @@ fun Route.conversationRoutes(
+             val messageId = call.parameters["messageId"].toUuid("message id")
+ 
+             chatService.initializeConversation(uuid)
+-            chatService.deleteMessage(uuid, messageId)
++            try {
++                chatService.deleteMessage(uuid, messageId)
++            } catch (conflict: RunHistoryConflict) {
++                call.respond(HttpStatusCode.Conflict, mapOf("error" to conflict.message))
++                return@delete
++            }
+ 
+             call.respond(HttpStatusCode.OK, mapOf("status" to "deleted"))
+         }
