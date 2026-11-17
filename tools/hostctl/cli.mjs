@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { doctor } from './doctor.mjs';
+import { exportSource } from './source.mjs';
 import { loadInputs } from './inputs.mjs';
 import { prepare, verifyReplay, exportSeries } from './workspace.mjs';
 
@@ -28,6 +29,7 @@ try {
         ['unavailable', 'mismatch'].includes(checks[key].compliance))) process.exitCode = 1;
       break;
     }
+    case 'source': result = await exportSource(options); break;
     case 'prepare': result = await prepare(options); break;
     case 'verify-replay':
       if (!options.expected) throw new Error('--expected is required');
@@ -35,7 +37,7 @@ try {
     case 'export':
       if (!options.workspace) throw new Error('--workspace is required');
       result = await exportSeries(options); break;
-    default: throw new Error('Usage: hostctl doctor|prepare|verify-replay|export [--profile NAME] [--source PATH] [--out PATH] [--expected PATH] [--workspace PATH]');
+    default: throw new Error('Usage: hostctl doctor|prepare|verify-replay|export|source [--profile NAME] [--source PATH] [--out PATH] [--expected PATH] [--workspace PATH]');
   }
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {
