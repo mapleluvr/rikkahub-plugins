@@ -228,17 +228,20 @@ private fun PluginManagement(host: PluginHost, conversation: Conversation?) {
                 }
             },
             confirmButton = {
-                TextButton(enabled = !busy && (!rollback || approveRollback) && (!sourceChanged || approveSource), onClick = {
-                    action {
-                        host.activate(
-                            ready,
-                            ready.pkg.manifest.capabilities,
-                            allowRollback = approveRollback,
-                            allowSourceChange = approveSource
-                        )
-                        candidate = null
+                TextButton(
+                    enabled = !busy && (!rollback || approveRollback) && (!sourceChanged || approveSource),
+                    onClick = {
+                        action {
+                            host.activate(
+                                ready,
+                                ready.pkg.manifest.capabilities,
+                                allowRollback = approveRollback,
+                                allowSourceChange = approveSource
+                            )
+                            candidate = null
+                        }
                     }
-                }) { Text(stringResource(R.string.plugin_host_approve)) }
+                ) { Text(stringResource(R.string.plugin_host_approve)) }
             },
             dismissButton = {
                 TextButton(enabled = !busy, onClick = { candidate = null }) {

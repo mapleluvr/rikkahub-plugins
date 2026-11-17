@@ -4,7 +4,10 @@ import android.content.ContextWrapper
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.rikkahub.plugins.runtime.PluginHost
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import kotlin.uuid.Uuid

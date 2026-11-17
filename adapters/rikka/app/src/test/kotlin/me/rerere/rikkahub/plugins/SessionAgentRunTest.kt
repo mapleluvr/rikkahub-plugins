@@ -297,8 +297,12 @@ class SessionAgentRunTest {
         val session = open(initial, store)
         val lease = PackageLease("dev.example.plugin", "a".repeat(64), 1, Uuid.random().toString())
         var authorized = true
-        val run = SessionAgentRun.open(session, initial.currentMessages, pluginLeases = listOf(lease),
-            packageAuthorization = { authorized }) { _, _ -> null }
+        val run = SessionAgentRun.open(
+            session,
+            initial.currentMessages,
+            pluginLeases = listOf(lease),
+            packageAuthorization = { authorized }
+        ) { _, _ -> null }
         val provider = ScriptedProvider()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
@@ -332,11 +336,19 @@ class SessionAgentRunTest {
         val session = open(initial, store)
         val lease = PackageLease("dev.example.plugin", "a".repeat(64), 1, Uuid.random().toString())
         var authorized = true
-        val run = SessionAgentRun.open(session, initial.currentMessages, pluginLeases = listOf(lease),
-            packageAuthorization = { authorized }) { _, _ -> null }
+        val run = SessionAgentRun.open(
+            session,
+            initial.currentMessages,
+            pluginLeases = listOf(lease),
+            packageAuthorization = { authorized }
+        ) { _, _ -> null }
         val provider = ScriptedProvider().apply { firstTool = true }
         var effects = 0
-        val tool = Tool(name = "effect", description = "effect", execute = { effects++; listOf(UIMessagePart.Text("done")) })
+        val tool =
+            Tool(name = "effect", description = "effect", execute = {
+                effects++
+                listOf(UIMessagePart.Text("done"))
+            })
         val revoking = object : AgentHooks by hooks {
             override suspend fun finishStep(message: UIMessage, newPartsFrom: Int): UIMessage {
                 authorized = false
@@ -344,8 +356,10 @@ class SessionAgentRunTest {
             }
         }
         val plan = run.resumePlan()
-        val events = runAgent(run.bind(request(provider, plan.history).copy(tools = listOf(tool)), plan),
-            run.hooks(revoking)).toList()
+        val events = runAgent(
+            run.bind(request(provider, plan.history).copy(tools = listOf(tool)), plan),
+            run.hooks(revoking)
+        ).toList()
         events.forEach { run.accept(it) }
         assertEquals(1, provider.calls)
         assertEquals(0, effects)
@@ -360,13 +374,20 @@ class SessionAgentRunTest {
         val session = open(initial, store)
         val lease = PackageLease("dev.example.plugin", "a".repeat(64), 1, Uuid.random().toString())
         var authorized = false
-        val run = SessionAgentRun.open(session, initial.currentMessages, pluginLeases = listOf(lease),
-            packageAuthorization = { authorized }) { _, _ -> null }
+        val run = SessionAgentRun.open(
+            session,
+            initial.currentMessages,
+            pluginLeases = listOf(lease),
+            packageAuthorization = { authorized }
+        ) { _, _ -> null }
         SessionRunStore(session).addGate(run.ref, Gate("user", GateKind.USER_PAUSE))
         authorized = true
         val restored = open(initial, store)
-        val resumed = SessionAgentRun.open(restored, restored.state.value.currentMessages,
-            packageAuthorization = { authorized }) { _, _ -> null }
+        val resumed = SessionAgentRun.open(
+            restored,
+            restored.state.value.currentMessages,
+            packageAuthorization = { authorized }
+        ) { _, _ -> null }
         val provider = ScriptedProvider()
         var plan = resumed.resumePlan()
         val waiting = runAgent(resumed.bind(request(provider, plan.history), plan), resumed.hooks(hooks)).toList()

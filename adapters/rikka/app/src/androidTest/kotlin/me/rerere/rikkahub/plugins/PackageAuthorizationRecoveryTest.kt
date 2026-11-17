@@ -44,9 +44,13 @@ class PackageAuthorizationRecoveryTest {
                     val entry = source.nextEntry ?: break
                     val original = source.readBytes()
                     val contents = if (entry.name == "manifest.json") {
-                        val manifest = PluginContract.json.decodeFromString<PluginManifest>(original.toString(Charsets.UTF_8))
+                        val manifest = PluginContract.json.decodeFromString<PluginManifest>(
+                            original.toString(Charsets.UTF_8)
+                        )
                         PluginContract.json.encodeToString(manifest.copy(id = manifest.id + suffix)).toByteArray()
-                    } else original
+                    } else {
+                        original
+                    }
                     target.putNextEntry(ZipEntry(entry.name))
                     target.write(contents)
                     target.closeEntry()

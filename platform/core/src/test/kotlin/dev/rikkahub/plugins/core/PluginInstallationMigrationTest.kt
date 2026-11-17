@@ -5,7 +5,11 @@ import dev.rikkahub.plugins.protocol.PluginManifest
 import dev.rikkahub.plugins.protocol.PluginOperationDeclaration
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
-import org.junit.Assert.*
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files

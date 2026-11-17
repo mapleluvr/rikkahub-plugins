@@ -111,8 +111,11 @@ class SessionOperationDispatcher(
     private fun validateRunPackages(current: Conversation, call: OperationCall) {
         call.run?.let { ref ->
             val saved = current.executionLedger().runs[ref.runId]
-            requireOperationAdmission(saved?.state?.ref == ref &&
-                saved.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE, "Owning run ended or changed")
+            requireOperationAdmission(
+                saved?.state?.ref == ref &&
+                    saved.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE,
+                "Owning run ended or changed"
+            )
             if (!packageAuthorization(saved!!.pluginLeases)) {
                 throw OperationWaiting("Pinned plugin package authorization is unavailable")
             }

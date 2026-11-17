@@ -88,8 +88,10 @@ class PluginUiWorkflowTest {
             val confirmed = repository.getConversationById(conversation.id)!!
             val receipt = confirmed.executionLedger().operations.values.single()
             assertEquals(AttemptStatus.SETTLED, receipt.status)
-            assertEquals(2, receipt.result!!.artifacts.single().content.jsonObject.getValue("messages")
-                .jsonPrimitive.content.toInt())
+            assertEquals(
+                2,
+                receipt.result!!.artifacts.single().content.jsonObject.getValue("messages").jsonPrimitive.content.toInt()
+            )
             assertEquals(conversation.currentMessages.map { it.id }, confirmed.currentMessages.map { it.id })
             assertTrue(confirmed.executionLedger().runs.isEmpty())
             service.editMessage(
@@ -140,7 +142,8 @@ class PluginUiWorkflowTest {
                 java.util.zip.ZipOutputStream(output).use { zip ->
                     for ((name, text) in mapOf(
                         "manifest.json" to kotlinx.serialization.json.Json.encodeToString(manifest),
-                        "main.js" to "globalThis.rikkaPlugin = rk => rk.registerOperation('review', () => ({artifacts:[]}));"
+                        "main.js" to
+                            "globalThis.rikkaPlugin = rk => rk.registerOperation('review', () => ({artifacts:[]}));"
                     )) {
                         zip.putNextEntry(java.util.zip.ZipEntry(name))
                         zip.write(text.toByteArray())

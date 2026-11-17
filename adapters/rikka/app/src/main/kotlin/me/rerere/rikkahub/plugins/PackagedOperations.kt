@@ -44,4 +44,8 @@ fun PluginHost.authorizedPackages(leases: List<dev.rikkahub.plugins.protocol.Pac
     }
 
 fun PluginHost.operationDispatcher(): SessionOperationDispatcher =
-    SessionOperationDispatcher(operationDefinitions(), packageAuthorization = ::authorizedPackages, authorized = ::authorized)
+    SessionOperationDispatcher(
+        operationDefinitions(),
+        packageAuthorization = ::authorizedPackages,
+        authorized = ::authorized
+    )
