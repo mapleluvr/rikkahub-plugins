@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="plugin_host_title">插件</string>
+    <string name="plugin_host_import">导入插件包</string>
+    <string name="plugin_host_empty">导入 .rikkaplug 插件包，添加工具和面板。</string>
+    <string name="plugin_host_activate">启用</string>
+    <string name="plugin_host_disable">停用</string>
+    <string name="plugin_host_approve">授权并启用</string>
+    <string name="plugin_host_consent">插件权限</string>
+    <string name="plugin_host_cancel">取消</string>
+    <string name="plugin_host_close">关闭</string>
+    <string name="plugin_host_loading">正在加载插件…</string>
+    <string name="plugin_host_open">打开面板</string>
+    <string name="plugin_host_overlay">打开悬浮面板</string>
+    <string name="plugin_host_no_conversation">从聊天页打开此面板后即可执行操作。</string>
+    <string name="plugin_host_expired">此面板已失效，请从插件列表重新打开。</string>
+    <string name="plugin_host_accepted">操作已接收，可在下方查看进度。</string>
+    <string name="plugin_host_receipts">操作与报告</string>
+    <string name="plugin_host_running">执行中</string>
+    <string name="plugin_host_settled">已完成</string>
+    <string name="plugin_host_prepared">等待执行</string>
+    <string name="plugin_host_unknown">结果待核对</string>
+    <string name="plugin_host_cancelled">已停止或拒绝</string>
+    <string name="plugin_host_stop">停止</string>
+    <string name="plugin_host_read_context">读取当前会话</string>
+    <string name="plugin_host_write_context">调整后续请求使用的上下文</string>
+    <string name="plugin_host_write_artifacts">在当前会话保存报告</string>
+    <string name="plugin_host_tools">为助手提供工具</string>
+    <string name="plugin_host_actions">显示面板和操作按钮</string>
+    <string name="plugin_host_app_overlay">在应用内显示悬浮面板</string>
+    <string name="plugin_host_details">工具详情</string>
+    <string name="plugin_host_source_changed">此操作执行后，原消息已有修改。</string>
+    <string name="plugin_host_verify_result">请先查看执行记录并核对外部结果，再发起新操作。此尝试不会自动重试。</string>
+    <string name="plugin_host_receipt_details">查看执行记录</string>
+</resources>

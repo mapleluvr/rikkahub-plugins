@@ -37,6 +37,8 @@ class SessionAgentRun private constructor(
     var pending: OperationCall? = null
         private set
 
+    val pluginLeases: List<PackageLease> get() = snapshot().pluginLeases
+
     private fun snapshot() = session.state.value.executionLedger().runs.getValue(ref.runId)
     private fun blocked(): String? = snapshot().state.let {
         when {
@@ -333,6 +335,7 @@ class SessionAgentRun private constructor(
             session: ConversationSession,
             history: List<UIMessage>,
             initialReplyNodeId: Uuid? = null,
+            pluginLeases: List<PackageLease> = emptyList(),
             policy: suspend (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
         ): SessionAgentRun {
             val branch =
@@ -358,6 +361,7 @@ class SessionAgentRun private constructor(
                     0,
                     inputIds = history.map { it.id.toString() },
                     replyNodeId = initialReplyNodeId?.toString(),
+                    pluginLeases = pluginLeases,
                 ))
             }
             return SessionAgentRun(session, saved.state.ref, policy).also { controller ->

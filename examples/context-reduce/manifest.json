@@ -1,0 +1,26 @@
+{
+  "id": "dev.rikka.contextreduce",
+  "name": "上下文删减",
+  "version": "0.1.0",
+  "apiVersion": "1",
+  "entry": "main.js",
+  "capabilities": [
+    "context.read",
+    "context.write",
+    "ui.actions",
+    "ui.overlay.app"
+  ],
+  "operations": [
+    {
+      "id": "reduce",
+      "title": "保留最近两条消息"
+    }
+  ],
+  "panels": [
+    {
+      "id": "main",
+      "title": "上下文删减",
+      "overlay": true
+    }
+  ]
+}

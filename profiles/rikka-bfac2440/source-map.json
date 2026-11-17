@@ -252,6 +252,150 @@
     {
       "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/WorkspaceSnapshotAdmissionTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/WorkspaceSnapshotAdmissionTest.kt"
+    },
+    {
+      "from": "platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/PluginPackage.kt",
+      "to": "vendor/rikka-plugin-host/platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/PluginPackage.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginContract.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginContract.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginArchive.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginArchive.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginPackageStore.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginPackageStore.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/PluginPackageTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/PluginPackageTest.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/PluginInstance.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/PluginInstance.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/contractTest/kotlin/dev/rikkahub/plugins/runtime/PluginInstanceTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/contractTest/kotlin/dev/rikkahub/plugins/runtime/PluginInstanceTest.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/main/AndroidManifest.xml",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/main/AndroidManifest.xml"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/RuntimeTransport.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/RuntimeTransport.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/IsolatedPluginService.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/IsolatedPluginService.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/IsolatedPluginClient.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/IsolatedPluginClient.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/IsolatedPluginTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/IsolatedPluginTest.kt"
+    },
+    {
+      "from": "platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/PluginCatalog.kt",
+      "to": "vendor/rikka-plugin-host/platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/PluginCatalog.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginCatalog.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginCatalog.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/PluginCatalogTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/PluginCatalogTest.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginCatalogFile.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginCatalogFile.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/PluginHost.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/main/kotlin/dev/rikkahub/plugins/runtime/PluginHost.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/PluginHostTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/PluginHostTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/PackagedOperations.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/PackagedOperations.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/RikkaPluginManager.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/RikkaPluginManager.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PackagedOperationTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PackagedOperationTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/assets/plugins/context-reduce.rikkaplug",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/assets/plugins/context-reduce.rikkaplug"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/assets/plugins/review-report.rikkaplug",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/assets/plugins/review-report.rikkaplug"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginUiCommon.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginUiCommon.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginManagementPage.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginManagementPage.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginPanelPage.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginPanelPage.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/res/values/plugin_host.xml",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/res/values/plugin_host.xml"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/res/values-zh/plugin_host.xml",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/res/values-zh/plugin_host.xml"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginUiWorkflowTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginUiWorkflowTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/ToolDetailsContractTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/ToolDetailsContractTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/PackagedTools.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/PackagedTools.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PackagedToolServiceTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PackagedToolServiceTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginToolRenderer.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginToolRenderer.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginToolSchema.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginToolSchema.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/assets/plugins/context-reduce.rikkaplug.sha256",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/assets/plugins/context-reduce.rikkaplug.sha256"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/assets/plugins/review-report.rikkaplug.sha256",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/assets/plugins/review-report.rikkaplug.sha256"
     }
   ]
 }

@@ -9,7 +9,7 @@
     "node": ">=24.15.0 <25"
   },
   "scripts": {
-    "test": "node --test tools/hostctl/test/*.test.mjs",
+    "test": "node --test tools/hostctl/test/*.test.mjs sdk/plugin/test/*.test.mjs",
     "hostctl": "node tools/hostctl/cli.mjs"
   },
   "devDependencies": {

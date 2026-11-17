@@ -53,6 +53,8 @@ data class RunCheckpoint(
     val toolDefinitions: Map<String, String> = emptyMap(),
     val consumedToolPermits: Map<String, String> = emptyMap(),
     val approvalRequests: Map<String, ToolApprovalRequestRecord> = emptyMap(),
+    /** Exact packages selected when this logical run was created, including an explicitly empty selection. */
+    val pluginLeases: List<PackageLease> = emptyList(),
 )
 
 /** One versioned host envelope. Unknown envelope versions must never execute. */

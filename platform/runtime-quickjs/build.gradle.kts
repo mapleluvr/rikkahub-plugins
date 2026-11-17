@@ -11,8 +11,10 @@ android {
 }
 
 dependencies {
+    implementation(project(":plugin-core"))
     implementation(libs.quickjs)
     implementation(libs.kotlinx.coroutines.core)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:${libs.versions.kotlin.coroutines.core.get()}")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation("androidx.test:runner:1.7.0")

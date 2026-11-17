@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="plugin_host_title">Plugins</string>
+    <string name="plugin_host_import">Import package</string>
+    <string name="plugin_host_empty">Import a .rikkaplug package to add tools and panels.</string>
+    <string name="plugin_host_activate">Enable</string>
+    <string name="plugin_host_disable">Disable</string>
+    <string name="plugin_host_approve">Approve and enable</string>
+    <string name="plugin_host_consent">Plugin permissions</string>
+    <string name="plugin_host_cancel">Cancel</string>
+    <string name="plugin_host_close">Close</string>
+    <string name="plugin_host_loading">Loading plugins…</string>
+    <string name="plugin_host_open">Open panel</string>
+    <string name="plugin_host_overlay">Open floating panel</string>
+    <string name="plugin_host_no_conversation">Open this panel from a chat to use its actions.</string>
+    <string name="plugin_host_expired">This panel is unavailable. Reopen it from the plugin list.</string>
+    <string name="plugin_host_accepted">Operation accepted. Its progress appears below.</string>
+    <string name="plugin_host_receipts">Operations and reports</string>
+    <string name="plugin_host_running">Running</string>
+    <string name="plugin_host_settled">Completed</string>
+    <string name="plugin_host_prepared">Waiting</string>
+    <string name="plugin_host_unknown">Result needs verification</string>
+    <string name="plugin_host_cancelled">Stopped or rejected</string>
+    <string name="plugin_host_stop">Stop</string>
+    <string name="plugin_host_read_context">Read this conversation</string>
+    <string name="plugin_host_write_context">Adjust the context used in future requests</string>
+    <string name="plugin_host_write_artifacts">Save reports in this conversation</string>
+    <string name="plugin_host_tools">Provide tools to the assistant</string>
+    <string name="plugin_host_actions">Show panels and operation buttons</string>
+    <string name="plugin_host_app_overlay">Show floating panels inside the app</string>
+    <string name="plugin_host_details">Tool details</string>
+    <string name="plugin_host_source_changed">The source has changed since this operation.</string>
+    <string name="plugin_host_verify_result">Check the recorded attempt and any external result before starting new work. This attempt will not be retried automatically.</string>
+    <string name="plugin_host_receipt_details">Receipt details</string>
+</resources>

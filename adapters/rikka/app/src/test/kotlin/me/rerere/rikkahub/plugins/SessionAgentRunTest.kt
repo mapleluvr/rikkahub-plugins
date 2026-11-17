@@ -268,6 +268,24 @@ class SessionAgentRunTest {
         }
     }
 
+    @Test fun reopenedRunRetainsItsPackageSelectionIncludingAnEmptySelection() = runBlocking {
+        val old = PackageLease("dev.example.plugin", "a".repeat(64), 1)
+        val updated = old.copy(packageHash = "b".repeat(64), activationEpoch = 2)
+        for (selection in listOf(emptyList(), listOf(old))) {
+            val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("start")))
+            val store = FakeConversationStore(initial)
+            val session = open(initial, store)
+            val first = SessionAgentRun.open(session, initial.currentMessages, pluginLeases = selection) { _, _ -> null }
+            SessionRunStore(session).addGate(first.ref, Gate("pause", GateKind.USER_PAUSE))
+            val restored = open(initial, store)
+            val resumed = SessionAgentRun.open(restored, restored.state.value.currentMessages,
+                pluginLeases = listOf(updated)) { _, _ -> null }
+            assertEquals(first.ref, resumed.ref)
+            assertEquals(selection, resumed.pluginLeases)
+            assertEquals(selection, store.persisted!!.executionLedger().runs.getValue(first.ref.runId).pluginLeases)
+        }
+    }
+
     private suspend fun CoroutineScope.open(initial: Conversation, store: FakeConversationStore) =
         ConversationSession(initial.id, initial, this, store, {}).also { it.initialize({ store.persisted }) }
 
