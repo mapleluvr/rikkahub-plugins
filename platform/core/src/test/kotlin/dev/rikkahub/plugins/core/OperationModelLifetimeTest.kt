@@ -75,7 +75,70 @@ class OperationModelLifetimeTest {
         verifyDetachedReservation(timeout = false, returned = true)
     }
 
-    private suspend fun TestScope.verifyDetachedReservation(timeout: Boolean, returned: Boolean = false) {
+    @Test
+    fun compatibilityDispatchCannotEscapeTheOperation() = runTest {
+        verifyEscapedCompatibilityPermission(permissionOnly = false)
+    }
+
+    @Test
+    fun compatibilityPermissionCallbackCannotEscapeTheOperation() = runTest {
+        verifyEscapedCompatibilityPermission(permissionOnly = true)
+    }
+
+    @Test
+    fun compatibilityModelRequestInsideOperationStillExecutes() = runTest {
+        var charges = 0
+        var providers = 0
+        val runner = OperationRunner(listOf(OperationDefinition("test/report", lease, emptySet()) {
+            val response = it.modelRequests.dispatch {
+                providers++
+                "summary"
+            }
+            assertEquals("summary", response)
+            OperationResult()
+        }))
+        runner.execute(call, emptySet(), "attempt", chargeModelAttempt = { charges++ }) { }
+        assertEquals(1, charges)
+        assertEquals(1, providers)
+    }
+
+    @Test
+    fun compatibilityCancellationDrainsDetachedPermissionBeforeSettlement() = runTest {
+        verifyDetachedReservation(timeout = false, journaled = false)
+    }
+
+    @Test
+    fun compatibilityTimeoutDrainsDetachedPermissionBeforeSettlement() = runTest {
+        verifyDetachedReservation(timeout = true, journaled = false)
+    }
+
+    @Test
+    fun compatibilityReturnedHandlerCannotSettleWithAnUnfinishedModel() = runTest {
+        verifyDetachedReservation(timeout = false, returned = true, journaled = false)
+    }
+
+    private suspend fun verifyEscapedCompatibilityPermission(permissionOnly: Boolean) {
+        var escaped: OperationContext? = null
+        var charges = 0
+        var providers = 0
+        val runner = OperationRunner(listOf(OperationDefinition("test/report", lease, emptySet()) {
+            escaped = it
+            OperationResult()
+        }))
+        runner.execute(call, emptySet(), "attempt", chargeModelAttempt = { charges++ }) { }
+        val result = runCatching {
+            if (permissionOnly) escaped!!.beforeModelRequest() else escaped!!.modelRequests.dispatch { providers++ }
+        }
+        assertEquals("An ended job must not admit another model request", 0, charges)
+        assertEquals("An ended job must not enter Provider", 0, providers)
+        assertTrue("Both compatibility entrypoints must reject escaped capabilities", result.isFailure)
+    }
+
+    private suspend fun TestScope.verifyDetachedReservation(
+        timeout: Boolean,
+        returned: Boolean = false,
+        journaled: Boolean = true
+    ) {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val refunded = CompletableDeferred<Unit>()
@@ -123,7 +186,8 @@ class OperationModelLifetimeTest {
                     emptySet(),
                     "attempt",
                     timeoutMillis = 100,
-                    modelJournal = journal
+                    chargeModelAttempt = { journal.reserve("compatibility-permission") },
+                    modelJournal = journal.takeIf { journaled }
                 ) { }
             }
         }
@@ -138,16 +202,17 @@ class OperationModelLifetimeTest {
             }
             runCurrent()
             assertFalse(
-                "Do not classify settlement while a known-undispatched refund is still running",
+                "Do not classify settlement while owned model permission cleanup is still running",
                 operation.isCompleted
             )
             assertFalse(refunded.isCompleted)
             release.complete(Unit)
             runCurrent()
-            assertTrue(refunded.isCompleted)
+            assertEquals(journaled, refunded.isCompleted)
             assertTrue(operation.isCompleted)
             if (returned) assertTrue(operation.await().isFailure)
-            assertEquals(0, charges)
+            // A permission-only host has no durable ticket or reliable refund protocol.
+            assertEquals(if (journaled) 0 else 1, charges)
             assertEquals(0, providers)
         } finally {
             release.complete(Unit)

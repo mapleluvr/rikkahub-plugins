@@ -68,12 +68,17 @@ class OperationRunner(definitions: List<OperationDefinition>) {
                 validate(call)
                 validateModelDispatch()
             }
-            val ownedModels = modelJournal?.let { JournaledModelRequests(it, validateModel) }
-            val modelRequests = ownedModels ?: ModelRequests.fromPermission {
-                validateModel()
-                chargeModelAttempt()
-                validateModel()
-            }
+            // Compatibility has no durable refund protocol, but shares the model job's ownership.
+            val ownedModels = JournaledModelRequests(
+                modelJournal ?: object : ModelRequestJournal {
+                    override suspend fun reserve(id: String) = chargeModelAttempt()
+                    override suspend fun start(id: String) { }
+                    override suspend fun refuse(id: String) { }
+                    override suspend fun confirm(id: String) { }
+                },
+                validateModel,
+            )
+            val modelRequests: ModelRequests = ownedModels
             var unfinishedModels = false
             val result = try {
                 operation.execute(OperationContext(
@@ -88,7 +93,7 @@ class OperationRunner(definitions: List<OperationDefinition>) {
             } finally {
                 // A detached CPU builder need not be joined, but its admitted model work must drain
                 // before the dispatcher classifies durable receipts or accepts a returned result.
-                unfinishedModels = withContext(NonCancellable) { ownedModels?.closeAndDrain() ?: false }
+                unfinishedModels = withContext(NonCancellable) { ownedModels.closeAndDrain() }
             }
             check(!unfinishedModels) { "Operation returned with an unfinished model job" }
             currentCoroutineContext().ensureActive()
