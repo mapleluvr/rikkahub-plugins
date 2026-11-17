@@ -1,4 +1,4 @@
-From 52a04009bc63d499fa73377824cf3f48b574dc38 Mon Sep 17 00:00:00 2001
+From 1b05bd70b5159f08493570a21880109785e168d5 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 09:50:06 +0800
 Subject: [PATCH] Publish confirmed approvals and separate regeneration from

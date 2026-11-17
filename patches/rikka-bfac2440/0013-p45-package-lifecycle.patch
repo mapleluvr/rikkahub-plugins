@@ -1,0 +1,92 @@
+From 2def420e2ae07f0c85ddeb24b3deda682756edab Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 21:30:06 +0800
+Subject: [PATCH] Preserve settled tool identity and expose missing package
+ recovery
+
+Patch-Id: p45-package-lifecycle
+---
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt |  2 +-
+ .../java/me/rerere/rikkahub/RouteActivity.kt  |  4 ++--
+ .../me/rerere/rikkahub/service/ChatService.kt | 21 ++++++++++++++++++-
+ 3 files changed, 23 insertions(+), 4 deletions(-)
+
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index fd60289d5b5e11e15466ae36f127568f5f78de24..c4452cee13a7a853a10e2cc8b1402cddc4402a4a 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -317,7 +317,7 @@ internal class AgentLoop(
+             }
+             val output = execute(tool)
+             updateTool(tool.toolCallId, starting = false) {
+-                it.copy(output = output.output, details = output.details,
++                it.copy(output = output.output, details = output.details ?: it.details,
+                     finishedAt = if (runs) Clock.System.now() else it.finishedAt)
+             }
+         }
+diff --git a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
+index 625561aca28f89d7d08165288f9dd17f28cb5e17..9f9cc55df1c489cfcdf970d3346e54363af35bde 100644
+--- a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
++++ b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
+@@ -552,7 +552,7 @@ class RouteActivity : ComponentActivity() {
+ 
+                             entry<Screen.PluginPanel> { key ->
+                                 me.rerere.rikkahub.plugins.ui.PluginPanelPage(
+-                                    key.pluginId, key.hash, key.epoch, key.panelId, key.conversationId
++                                    key.pluginId, key.hash, key.epoch, key.panelId, key.conversationId, key.issuerId
+                                 )
+                             }
+ 
+@@ -806,7 +806,7 @@ sealed interface Screen : NavKey {
+     @Serializable
+     data class PluginPanel(
+         val pluginId: String, val hash: String, val epoch: Long,
+-        val panelId: String, val conversationId: String? = null,
++        val panelId: String, val conversationId: String? = null, val issuerId: String = "",
+     ) : Screen
+ 
+     @Serializable
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index c2cc4a75d503ecc74432011ba3323e79d16bfbe9..8f2dde90dbf64b371384c50b5edfe401632d4649 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -788,6 +788,16 @@ class ChatService(
+                 }
+                 null
+             }
++            if (activeRun != null && pluginHost != null && activeRun.pluginLeases.any {
++                val installed = pluginHost.state.value.packages[it.packageHash]
++                installed == null || installed.manifest.id != it.pluginId
++            }) {
++                session.inbox.pause()
++                addError(IllegalStateException("Pinned plugin package is unavailable; restore it or stop this run"),
++                    conversationId)
++                appEventBus.emit(AppEvent.ChatGenerationSegmentEnded(conversationId))
++                return TurnResult.Waiting
++            }
+             val selectedPackages = activeRun?.pluginLeases ?: pluginHost?.let {
+                 session.capturePackageSelection(it.state.value)
+             }.orEmpty()
+@@ -1090,12 +1100,21 @@ class ChatService(
+     /** Explicit idle-session adoption; a running or waiting generation retains its saved package snapshot. */
+     suspend fun adoptCurrentPlugins(conversationId: Uuid) {
+         val catalog = requireNotNull(pluginManager).host().state.value
++        changeConversationPlugins(conversationId, catalog.preferredSelection())
++    }
++
++    /** Restoring a database does not restore execution authority; users may explicitly remove idle selections. */
++    suspend fun clearConversationPlugins(conversationId: Uuid) {
++        changeConversationPlugins(conversationId, SessionPackageSelection())
++    }
++
++    private suspend fun changeConversationPlugins(conversationId: Uuid, selection: SessionPackageSelection) {
+         withLoadedSession(conversationId) { session ->
+             session.commitExtension(session.incarnation) { current ->
+                 check(!session.isGenerating && !current.hasUnfinishedPluginRun()) {
+                     "Finish or stop the current run before adopting plugin updates"
+                 }
+-                current.withPackageSelection(catalog.preferredSelection())
++                current.withPackageSelection(selection)
+             }
+         }
+     }
