@@ -4,7 +4,16 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cleanCommit } from '../inputs.mjs';
+import { cleanCommit, safePath } from '../inputs.mjs';
+
+// Keep the path safety boundary independent from the particular character-check implementation.
+test('safePath rejects every C0 control character and colon without rejecting ordinary Unicode or internal spaces', () => {
+  for (let code = 0; code < 32; code++) {
+    assert.throws(() => safePath(`vendor/a${String.fromCharCode(code)}b.kt`), /Unsafe repository path/);
+  }
+  assert.throws(() => safePath('vendor/a:b.kt'), /Unsafe repository path/);
+  assert.equal(safePath('vendor/中文/a b.kt'), 'vendor/中文/a b.kt');
+});
 
 // A filesystem-monitor cache is a performance hint, not release-input evidence.
 test('cleanCommit checks actual changes even when a configured fsmonitor reports none', async () => {

@@ -20,7 +20,7 @@ export const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
 export function safePath(path) {
   if (typeof path !== 'string' || !path || isAbsolute(path) || path.includes('\\') ||
-      /[:\x00-\x1f]/.test(path) || path.split('/').some(part =>
+      path.includes(':') || [...path].some(char => char.charCodeAt(0) < 32) || path.split('/').some(part =>
         !part || part === '.' || part === '..' || part.toLowerCase() === '.git' || /[. ]$/.test(part) ||
         /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(part))) {
     throw new Error(`Unsafe repository path: ${path}`);
