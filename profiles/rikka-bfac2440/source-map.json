@@ -42,12 +42,32 @@
       "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/ContextProjection.kt"
     },
     {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/ModelRequests.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/ModelRequests.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/OperationModelLedger.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/OperationModelLedger.kt"
+    },
+    {
       "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/OperationRunner.kt",
       "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/OperationRunner.kt"
     },
     {
       "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/RunControl.kt",
       "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/RunControl.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/ModelRequestsTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/ModelRequestsTest.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/OperationModelLedgerTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/OperationModelLedgerTest.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/OperationModelLifetimeTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/OperationModelLifetimeTest.kt"
     },
     {
       "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/OperationRunnerTest.kt",
@@ -118,6 +138,10 @@
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionRunStoreTest.kt"
     },
     {
+      "from": "adapters/rikka/ai/src/test/kotlin/me/rerere/ai/agent/ModelRequestRetryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/ai/src/test/kotlin/me/rerere/ai/agent/ModelRequestRetryTest.kt"
+    },
+    {
       "from": "adapters/rikka/ai/src/test/kotlin/me/rerere/ai/agent/AgentReviewRegressionTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/ai/src/test/kotlin/me/rerere/ai/agent/AgentReviewRegressionTest.kt"
     },
@@ -146,8 +170,20 @@
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionAgentRunTest.kt"
     },
     {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/PluginToolRevocationRecoveryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/PluginToolRevocationRecoveryTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/OperationModelDispatchAccountingTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/OperationModelDispatchAccountingTest.kt"
+    },
+    {
       "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionOperationDispatcherTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionOperationDispatcherTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolRuntimeRecoveryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolRuntimeRecoveryTest.kt"
     },
     {
       "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/ProjectionProviderContractTest.kt",

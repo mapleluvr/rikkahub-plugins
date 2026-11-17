@@ -18,6 +18,8 @@ data class OperationRecord(
     val result: OperationResult? = null,
     val modelAttempts: Int = 0,
     val maxModelAttempts: Int = 8,
+    /** Separate from the main run attempt; null legacy receipts retain their charged uncertainty. */
+    val modelAttempt: ModelAttemptRecord? = null,
     /** Recorded before permission returns to any external-effect handler. */
     val effectAdmissions: Int = 0,
     /** Null only on legacy receipts; display lineage is not an operation-result index. */

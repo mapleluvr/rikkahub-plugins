@@ -43,18 +43,21 @@ object ModelAttemptLedger {
     /** Only the caller still before Provider invocation may confirm that this intent never dispatched. */
     fun refuse(checkpoint: RunCheckpoint, id: String): RunCheckpoint {
         val attempt = checkpoint.modelAttempt ?: return checkpoint
-        if (attempt.id != id || attempt.phase in setOf(ModelAttemptPhase.COMPLETED, ModelAttemptPhase.REFUSED)) {
-            return checkpoint
-        }
+        val refused = refusedTicket(attempt, id) ?: return checkpoint
         return checkpoint.copy(
             state = checkpoint.state.copy(
                 stepsUsed = checkpoint.state.stepsUsed - if (attempt.chargedStep) 1 else 0,
                 attemptsUsed = checkpoint.state.attemptsUsed - 1,
                 revision = checkpoint.state.revision + 1,
             ),
-            modelAttempt = attempt.copy(phase = ModelAttemptPhase.REFUSED),
+            modelAttempt = refused,
         )
     }
+
+    /** Shared by main requests and operation jobs; stale or already settled tickets cannot refund. */
+    fun refusedTicket(attempt: ModelAttemptRecord?, id: String): ModelAttemptRecord? = attempt?.takeIf {
+        it.id == id && it.phase in setOf(ModelAttemptPhase.RESERVED, ModelAttemptPhase.DISPATCH_INTENT)
+    }?.copy(phase = ModelAttemptPhase.REFUSED)
 
     fun confirm(checkpoint: RunCheckpoint, nextStep: Int): RunCheckpoint {
         val attempt = checkpoint.modelAttempt ?: return checkpoint

@@ -57,7 +57,8 @@ object OperationLedger {
 
     fun recover(ledger: ExecutionLedger): ExecutionLedger {
         validate(ledger)
-        return ledger.copy(operations = ledger.operations.mapValues { (_, record) ->
+        val recovered = OperationModelLedger.recover(ledger)
+        return recovered.copy(operations = recovered.operations.mapValues { (_, record) ->
             if (record.status == AttemptStatus.RUNNING) record.copy(status = AttemptStatus.UNKNOWN) else record
         })
     }

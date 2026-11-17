@@ -3,8 +3,10 @@ package dev.rikkahub.plugins.core
 import dev.rikkahub.plugins.protocol.OperationCall
 import dev.rikkahub.plugins.protocol.OperationResult
 import dev.rikkahub.plugins.protocol.PackageLease
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 data class OperationContext(
@@ -13,6 +15,7 @@ data class OperationContext(
     val capabilities: Set<String>,
     val beforeEffect: suspend () -> Unit = {},
     val beforeModelRequest: suspend () -> Unit = beforeEffect,
+    val modelRequests: ModelRequests = ModelRequests.fromPermission(beforeModelRequest),
     val executionBinding: ExecutionBinding = ExecutionBinding(listOfNotNull(call.caller, call.handler)),
 )
 
@@ -40,6 +43,8 @@ class OperationRunner(definitions: List<OperationDefinition>) {
         chargeModelAttempt: suspend () -> Unit = {},
         admitEffect: suspend () -> Unit = {},
         executionBinding: ExecutionBinding = ExecutionBinding(listOfNotNull(call.caller, call.handler)),
+        modelJournal: ModelRequestJournal? = null,
+        validateModelDispatch: suspend () -> Unit = {},
         validate: suspend (OperationCall) -> Unit
     ): OperationResult {
         require(call.id.isNotBlank() && attemptId.isNotBlank() && timeoutMillis > 0)
@@ -58,20 +63,34 @@ class OperationRunner(definitions: List<OperationDefinition>) {
                 currentCoroutineContext().ensureActive()
                 validate(call)
             }
-            val result = operation.execute(OperationContext(
-                call,
-                attemptId,
-                granted.toSet(),
-                beforeEffect,
-                beforeModelRequest = {
-                    currentCoroutineContext().ensureActive()
-                    validate(call)
-                    chargeModelAttempt()
-                    currentCoroutineContext().ensureActive()
-                    validate(call)
-                },
-                executionBinding = executionBinding,
-            ))
+            val validateModel: suspend () -> Unit = {
+                currentCoroutineContext().ensureActive()
+                validate(call)
+                validateModelDispatch()
+            }
+            val ownedModels = modelJournal?.let { JournaledModelRequests(it, validateModel) }
+            val modelRequests = ownedModels ?: ModelRequests.fromPermission {
+                validateModel()
+                chargeModelAttempt()
+                validateModel()
+            }
+            var unfinishedModels = false
+            val result = try {
+                operation.execute(OperationContext(
+                    call,
+                    attemptId,
+                    granted.toSet(),
+                    beforeEffect,
+                    beforeModelRequest = modelRequests,
+                    modelRequests = modelRequests,
+                    executionBinding = executionBinding,
+                ))
+            } finally {
+                // A detached CPU builder need not be joined, but its admitted model work must drain
+                // before the dispatcher classifies durable receipts or accepts a returned result.
+                unfinishedModels = withContext(NonCancellable) { ownedModels?.closeAndDrain() ?: false }
+            }
+            check(!unfinishedModels) { "Operation returned with an unfinished model job" }
             currentCoroutineContext().ensureActive()
             validate(call)
             result

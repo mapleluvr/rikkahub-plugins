@@ -184,6 +184,27 @@ class SessionAgentRun private constructor(
                 blocked() ?: snapshot().approvalFailure(message, tool)
                     ?: if (snapshot().state.frameRevision != preparedFrame) "Tool admission changed" else null
 
+            override suspend fun toolFailure(
+                message: UIMessage,
+                tool: me.rerere.ai.ui.UIMessagePart.Tool,
+                error: Throwable,
+            ): String? {
+                if (error !is ExecutionAuthorizationRevoked) return null
+                store.update(ref) { old ->
+                    // Stop may have won while the runtime was draining. Never revive its terminal run.
+                    if (old.state.status != RunStatus.ACTIVE) {
+                        old
+                    } else {
+                        val waiting = old.withPackageGate()
+                        waiting.copy(state = RunControl.addGate(
+                            waiting.state,
+                            Gate("host.recovery", GateKind.PLUGIN_FAULT)
+                        ))
+                    }
+                }
+                return "Tool ${tool.toolCallId} in ${message.id} has no confirmed outcome after execution revocation"
+            }
+
             override suspend fun checkpoint(message: UIMessage, next: AgentCursor): AgentCheckpoint {
                 var rejected: String? = null
                 val committed = session.commitExtension { current ->

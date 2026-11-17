@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.plugins.builtin
 
+import dev.rikkahub.plugins.core.ModelRequests
 import dev.rikkahub.plugins.protocol.ArtifactDraft
 import dev.rikkahub.plugins.protocol.OperationResult
 import dev.rikkahub.plugins.protocol.PackageLease
@@ -40,7 +41,7 @@ data class CompactInput(
 
 /** Policy and artifact interpretation for the shipped context feature, outside the execution kernel. */
 class BuiltinContextFeature(
-    private val summarize: suspend (Conversation, List<UIMessage>, String, suspend () -> Unit) -> String,
+    private val summarize: suspend (Conversation, List<UIMessage>, String, ModelRequests) -> String,
 ) {
     val operation =
         ConversationOperation(
@@ -149,7 +150,7 @@ class BuiltinContextFeature(
         return PreparedConversationOperation(
             sources = ids.map(stamps::getValue),
             execute = { invocation ->
-                val text = summarize(source, selected, prompt, invocation.beforeModelRequest)
+                val text = summarize(source, selected, prompt, invocation.modelRequests)
                 require(text.isNotBlank()) { "摘要为空" }
                 OperationResult(artifacts = listOf(ArtifactDraft("context.summary", JsonPrimitive(text))))
             },

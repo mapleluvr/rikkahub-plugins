@@ -2,6 +2,7 @@ package me.rerere.rikkahub.plugins
 
 import dev.rikkahub.plugins.core.ExecutionAuthorizationRevoked
 import dev.rikkahub.plugins.core.ExecutionBinding
+import dev.rikkahub.plugins.core.ModelRequestJournal
 import dev.rikkahub.plugins.core.OperationContext
 import dev.rikkahub.plugins.core.OperationDefinition
 import dev.rikkahub.plugins.core.OperationRunner
@@ -221,10 +222,12 @@ class SessionOperationDispatcher(
                 definition.capabilities,
                 attempt,
                 timeoutMillis,
-                chargeModelAttempt = {
-                    store.chargeModelAttempt(call, ::validate)
-                    validate(session.state.value)
-                    session.state.value.requireOperationEffectAllowed(call)
+                validateModelDispatch = { session.state.value.requireOperationEffectAllowed(call) },
+                modelJournal = object : ModelRequestJournal {
+                    override suspend fun reserve(id: String) = store.reserveModelAttempt(call, id, ::validate)
+                    override suspend fun start(id: String) = store.startModelAttempt(call, id, ::validate)
+                    override suspend fun refuse(id: String) = store.refuseModelAttempt(call, id)
+                    override suspend fun confirm(id: String) = store.confirmModelAttempt(call, id)
                 },
                 admitEffect = {
                     store.admitEffect(call, ::validate)

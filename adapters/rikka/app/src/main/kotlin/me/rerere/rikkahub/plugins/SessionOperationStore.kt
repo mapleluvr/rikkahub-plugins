@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.plugins
 
 import dev.rikkahub.plugins.core.OperationLedger
+import dev.rikkahub.plugins.core.OperationModelLedger
 import dev.rikkahub.plugins.protocol.ExecutionLedger
 import dev.rikkahub.plugins.protocol.OperationCall
 import dev.rikkahub.plugins.protocol.OperationRecord
@@ -95,8 +96,8 @@ class SessionOperationStore(private val session: ConversationSession) {
         }
     }
 
-    /** One model job per operation; each actual network retry is separately charged. */
-    suspend fun chargeModelAttempt(call: OperationCall, validate: (Conversation) -> Unit) {
+    /** One model job per operation; an unreturned reservation is not an external dispatch. */
+    suspend fun reserveModelAttempt(call: OperationCall, id: String, validate: (Conversation) -> Unit) {
         session.commitExtension(incarnation) { current ->
             validate(current)
             val ledger = current.executionLedger()
@@ -125,10 +126,36 @@ class SessionOperationStore(private val session: ConversationSession) {
             }
             current.withExecutionLedger(ledger.copy(
                 runs = runs,
-                operations = ledger.operations + (call.id to record.copy(
-                    modelAttempts = record.modelAttempts + 1,
-                    effectAdmissions = record.effectAdmissions + 1
-                )),
+                operations = ledger.operations + (call.id to OperationModelLedger.reserve(record, id)),
+            ))
+        }
+    }
+
+    suspend fun startModelAttempt(call: OperationCall, id: String, validate: (Conversation) -> Unit) {
+        session.commitExtension(incarnation) { current ->
+            validate(current)
+            current.requireOperationEffectAllowed(call)
+            val ledger = current.executionLedger()
+            current.withExecutionLedger(ledger.copy(
+                operations = ledger.operations +
+                    (call.id to OperationModelLedger.start(ledger.operations.getValue(call.id), id))
+            ))
+        }
+    }
+
+    /** Evidence-only settlement deliberately survives revocation or Stop; never adopts an output. */
+    suspend fun refuseModelAttempt(call: OperationCall, id: String) {
+        session.commitExtension(incarnation) { current ->
+            current.withExecutionLedger(OperationModelLedger.refuse(current.executionLedger(), call.id, id))
+        }
+    }
+
+    suspend fun confirmModelAttempt(call: OperationCall, id: String) {
+        session.commitExtension(incarnation) { current ->
+            val ledger = current.executionLedger()
+            current.withExecutionLedger(ledger.copy(
+                operations = ledger.operations +
+                    (call.id to OperationModelLedger.confirm(ledger.operations.getValue(call.id), id))
             ))
         }
     }
