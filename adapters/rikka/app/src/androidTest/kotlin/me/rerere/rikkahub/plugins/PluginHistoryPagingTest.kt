@@ -79,7 +79,9 @@ class PluginHistoryPagingTest {
         }
         val branched = if (withRevokedSibling) {
             initial.editMessage(user.id, listOf(UIMessagePart.Text("Sibling history source")))
-                .withPackageSelection(SessionPackageSelection(packages = mapOf(handler.pluginId to handler.packageHash)))
+                .withPackageSelection(
+                    SessionPackageSelection(packages = mapOf(handler.pluginId to handler.packageHash))
+                )
         } else {
             initial
         }
@@ -89,11 +91,17 @@ class PluginHistoryPagingTest {
             (0 until 13).associate { index ->
                 val id = "sibling-$index"
                 val call = OperationCall(
-                    id, "sibling/report-$index", BranchRef(initial.id.toString(), source.id.toString()),
-                    JsonNull, handler, frame = stamps
+                    id,
+                    "sibling/report-$index",
+                    BranchRef(initial.id.toString(), source.id.toString()),
+                    JsonNull,
+                    handler,
+                    frame = stamps
                 )
                 id to OperationRecord(
-                    call, stamps, status = AttemptStatus.SETTLED,
+                    call,
+                    stamps,
+                    status = AttemptStatus.SETTLED,
                     result = OperationResult(artifacts = listOf(ArtifactDraft("review", JsonPrimitive(id))))
                 )
             }
@@ -170,7 +178,9 @@ class PluginHistoryPagingTest {
                     val entry = source.nextEntry ?: break
                     val content = source.readBytes()
                     val bytes = if (entry.name == "manifest.json") {
-                        val manifest = PluginContract.json.decodeFromString<PluginManifest>(content.toString(Charsets.UTF_8))
+                        val manifest = PluginContract.json.decodeFromString<PluginManifest>(
+                            content.toString(Charsets.UTF_8)
+                        )
                         PluginContract.json.encodeToString(PluginManifest.serializer(), manifest.copy(
                             id = "dev.rikka.history.test" + Uuid.random().toString().replace("-", "")
                         )).toByteArray()

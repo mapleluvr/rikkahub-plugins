@@ -465,7 +465,10 @@ class SessionAgentRunTest {
         }
         val lease = PackageLease("dev.example.original", "a".repeat(64), 1, Uuid.random().toString())
         val run = SessionAgentRun.open(
-            session, initial.currentMessages, pluginLeases = listOf(lease), packageAuthorization = { authorized }
+            session,
+            initial.currentMessages,
+            pluginLeases = listOf(lease),
+            packageAuthorization = { authorized }
         ) { _, _ -> null }
         val provider = ScriptedProvider()
         val plan = run.resumePlan()
@@ -495,11 +498,16 @@ class SessionAgentRunTest {
                 it.initialize({ persisted })
             }
             val resumed = SessionAgentRun.open(
-                reopened, reopened.state.value.currentMessages, packageAuthorization = { authorized }
+                reopened,
+                reopened.state.value.currentMessages,
+                packageAuthorization = { authorized }
             ) { _, _ -> null }
             val recovered = reopened.state.value.executionLedger().runs.getValue(run.ref.runId)
             assertEquals(run.ref, resumed.ref)
-            assertFalse("Known non-dispatch must not become unknown on reopen", "host.recovery" in recovered.state.gates)
+            assertFalse(
+                "Known non-dispatch must not become unknown on reopen",
+                "host.recovery" in recovered.state.gates
+            )
             val freshPlan = resumed.resumePlan()
             runAgent(resumed.bind(request(provider, freshPlan.history), freshPlan), resumed.hooks(hooks))
                 .collect(resumed::accept)

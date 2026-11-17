@@ -136,7 +136,11 @@ class RunPackageRuntimeAdmissionTest {
                 assertTrue(outcome.toString(), outcome is OperationDispatch.Waiting)
                 assertEquals(AttemptStatus.PREPARED, record.status)
                 assertEquals(0, record.effectAdmissions)
-                assertEquals("No CALL may cross Binder; rejecting only its eventual result is insufficient", 0, local.callsSent.get())
+                assertEquals(
+                    "No CALL may cross Binder; rejecting only its eventual result is insufficient",
+                    0,
+                    local.callsSent.get()
+                )
                 assertTrue("host.package-authorization" in saved.runs.getValue(run.ref.runId).state.gates)
             } else {
                 assertNotNull("Independent B must still receive and return its own context", returnedByOriginal)
@@ -191,6 +195,7 @@ class RunPackageRuntimeAdmissionTest {
         private val connections = ConcurrentHashMap<ServiceConnection, ServiceConnection>()
 
         @Volatile private var armed = false
+
         @Volatile private var heldCacheCall = 2
         fun arm(cacheCall: Int) {
             cacheCalls.set(0)

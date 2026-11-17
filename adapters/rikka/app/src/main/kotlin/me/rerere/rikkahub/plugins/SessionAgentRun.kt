@@ -166,7 +166,9 @@ class SessionAgentRun private constructor(
 
             override suspend fun beginModel(step: Int, attempt: Int): String? =
                 blocked() ?: staleInput() ?: store.startModelDispatch(
-                    ref, checkNotNull(modelReservationId), preparedFrame
+                    ref,
+                    checkNotNull(modelReservationId),
+                    preparedFrame
                 ) { it.withPackageGate() }.reason
 
             override suspend fun modelNotDispatched(step: Int, attempt: Int) {

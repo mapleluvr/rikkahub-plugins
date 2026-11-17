@@ -254,7 +254,9 @@ class SessionOperationDispatcher(
             return result
         } catch (error: Throwable) {
             val failure = if (error is ExecutionAuthorizationRevoked) {
-                OperationWaiting("Owning plugin execution authorization is unavailable").also { it.addSuppressed(error) }
+                OperationWaiting("Owning plugin execution authorization is unavailable").also {
+                    it.addSuppressed(error)
+                }
             } else {
                 error
             }

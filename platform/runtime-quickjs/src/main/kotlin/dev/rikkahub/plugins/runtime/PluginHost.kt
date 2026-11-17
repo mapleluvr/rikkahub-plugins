@@ -42,10 +42,8 @@ class PluginHost private constructor(
         val origin: PluginReleaseOrigin? = null,
     )
 
-    private class InvocationOwner(
-        val host: PluginHost,
-        val previous: InvocationOwner?,
-    ) : AbstractCoroutineContextElement(Key) {
+    private class InvocationOwner(val host: PluginHost, val previous: InvocationOwner?,) :
+        AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<InvocationOwner>
         fun contains(target: PluginHost): Boolean = host === target || previous?.contains(target) == true
     }
