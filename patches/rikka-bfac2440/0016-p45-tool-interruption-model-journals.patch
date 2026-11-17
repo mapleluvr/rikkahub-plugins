@@ -1,0 +1,159 @@
+From a8eaed25a5fa03c3109250d0302b67594775a54e Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Wed, 18 Nov 2026 06:55:01 +0800
+Subject: [PATCH] Preserve interrupted tools and bind operation model dispatch
+ ownership
+
+Patch-Id: p45-tool-interruption-model-journals
+---
+ ai/src/main/java/me/rerere/ai/agent/Agent.kt  |  7 ++++++
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt |  3 +++
+ ai/src/main/java/me/rerere/ai/agent/Retry.kt  | 21 ++++++++++++++++++
+ .../rikkahub/data/ai/ChatRequestFactory.kt    | 22 ++++++++++---------
+ .../me/rerere/rikkahub/service/ChatService.kt |  4 ++--
+ 5 files changed, 45 insertions(+), 12 deletions(-)
+
+diff --git a/ai/src/main/java/me/rerere/ai/agent/Agent.kt b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+index c26b81280b2e418a99ec73d7e6df448cc71877b5..c524da0be07d3c29c7312ec224da7fb00f244734 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/Agent.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+@@ -85,6 +85,13 @@ interface AgentControl {
+     /** Recheck after the durable start marker, immediately before invoking a tool. */
+     fun admitTool(message: UIMessage, tool: UIMessagePart.Tool): String? = null
+ 
++    /**
++     * Classify an interrupted effect before it becomes a confirmed tool-error result.
++     * A non-null reason yields at this tool without output/finishedAt; the host persists any required wait.
++     * Null retains the ordinary domain-error result behavior.
++     */
++    suspend fun toolFailure(message: UIMessage, tool: UIMessagePart.Tool, error: Throwable): String? = null
++
+     /** Trusted synchronous admission, repeated immediately before every Provider attempt. */
+     fun admitModel(step: Int, attempt: Int): String? = null
+ 
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index d7f0b5a767ffc06140d6ad0cee41cde3269142e4..d526869df11f53b7a99284f3ae9c5c86baf72135 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -373,6 +373,9 @@ internal class AgentLoop(
+         // 取消必须向上传播，否则停止生成会被误报为工具执行错误
+         throw e
+     } catch (e: Throwable) {
++        request.control.toolFailure(checkNotNull(message), tool, e)?.let { reason ->
++            throw AgentYield(cursor(AgentBoundary.BeforeTool, tool.toolCallId), reason)
++        }
+         ToolExecutionResult(errorOutput("[${e.javaClass.name}] ${e.message}\n${e.stackTraceToString()}"))
+     }
+ 
+diff --git a/ai/src/main/java/me/rerere/ai/agent/Retry.kt b/ai/src/main/java/me/rerere/ai/agent/Retry.kt
+index 23e57fbde5b8641e09e8d05541edd328cc7960c1..849cca5dcb426685656ed1a90baac28a3dcf9403 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/Retry.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/Retry.kt
+@@ -34,6 +34,27 @@ data class RetryAttempt(
+     val delay: Duration,
+ )
+ 
++/** Retry Provider failures only; host admission/receipt storage failures are not network retries. */
++suspend fun <T> withModelRequestRetry(
++    policy: RetryPolicy,
++    dispatch: suspend (suspend () -> T) -> T,
++    onRetry: suspend (RetryAttempt) -> Unit = {},
++    request: suspend () -> T,
++): T {
++    var providerFailure: Throwable? = null
++    return withRetry(policy.copy(retryOn = { it === providerFailure && policy.retryOn(it) }), onRetry) {
++        providerFailure = null
++        dispatch {
++            try {
++                request()
++            } catch (error: Throwable) {
++                providerFailure = error
++                throw error
++            }
++        }
++    }
++}
++
+ /**
+  * 按 [policy] 执行 [block]：失败且允许重试时先调用 [onRetry]，等待后再执行一次。
+  */
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt
+index c29f5777fde5ae304d74d81e455ffd7d831c6a2a..72a0867f8e901e9daf2667dd1c76ec92569e50e7 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt
+@@ -11,7 +11,7 @@ import me.rerere.ai.agent.AgentRequest
+ import me.rerere.ai.agent.RetryPolicy
+ import me.rerere.ai.agent.StepRequest
+ import me.rerere.ai.agent.expandNotices
+-import me.rerere.ai.agent.withRetry
++import me.rerere.ai.agent.withModelRequestRetry
+ import me.rerere.ai.core.MessageRole
+ import me.rerere.ai.core.ReasoningLevel
+ import me.rerere.ai.core.Tool
+@@ -19,6 +19,7 @@ import me.rerere.ai.provider.Model
+ import me.rerere.ai.provider.ProviderManager
+ import me.rerere.ai.provider.ProviderSetting
+ import me.rerere.ai.provider.TextGenerationParams
++import me.rerere.ai.provider.TextGenerationResult
+ import me.rerere.ai.ui.UIMessage
+ import me.rerere.ai.ui.UIMessagePart
+ import me.rerere.ai.ui.limitContext
+@@ -183,12 +184,12 @@ class ChatRequestFactory(
+         turn: ChatTurnContext,
+         messages: List<UIMessage>,
+         compressPrompt: String,
+-        beforeDispatch: suspend () -> Unit = {},
++        dispatchModel: suspend (suspend () -> TextGenerationResult) -> TextGenerationResult = { it() },
+     ): String {
+         // 组装请求要把全部历史过一遍输入转换器，长对话要算好几秒：不能放在调用方的主线程上，
+         // 这段纯计算里也检查不到取消。放进独立的协程，调用方取消时 await 立刻返回、不用等它算完；
+         // 没算完的那份同时被取消，在下一个挂起点停下，最迟在发出请求之前
+-        val work = CoroutineScope(Dispatchers.IO).async { requestCompressionSummary(turn, messages, compressPrompt, beforeDispatch) }
++        val work = CoroutineScope(Dispatchers.IO).async { requestCompressionSummary(turn, messages, compressPrompt, dispatchModel) }
+         return try {
+             work.await()
+         } finally {
+@@ -200,19 +201,20 @@ class ChatRequestFactory(
+         turn: ChatTurnContext,
+         messages: List<UIMessage>,
+         compressPrompt: String,
+-        beforeDispatch: suspend () -> Unit,
++        dispatchModel: suspend (suspend () -> TextGenerationResult) -> TextGenerationResult,
+     ): String {
+         val (requestMessages, params) = buildStep(turn, messages)
+         // 压缩指令不经过输入转换器，模板转换器会把其中的花括号当成模板语法
+-        val result = withRetry(
++        val provider = usageRecorder.wrap(
++            providerManager.getProviderByType(turn.providerSetting),
++            UsageTag(UsageSource.COMPRESSION, turn.assistant.id, turn.conversationId),
++        )
++        val result = withModelRequestRetry(
+             policy = turn.settings.retryPolicy(),
++            dispatch = dispatchModel,
+             onRetry = { Log.w(TAG, "Compression request failed, retrying in ${it.delay}", it.cause) },
+         ) {
+-            beforeDispatch()
+-            usageRecorder.wrap(
+-                providerManager.getProviderByType(turn.providerSetting),
+-                UsageTag(UsageSource.COMPRESSION, turn.assistant.id, turn.conversationId),
+-            ).generateText(
++            provider.generateText(
+                 providerSetting = turn.providerSetting,
+                 messages = requestMessages + UIMessage.user(compressPrompt),
+                 // 助手的输出上限是给聊天回复定的，结构化摘要写不完会被截断；max_tokens 不属于请求前缀，改了不影响缓存
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 1a8f1a977e2ef8d793fbd5a39a8f0e02c0b8bd23..61cc005f163e4d4ef5a31835556a235ba9e4f3f3 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -123,9 +123,9 @@ class ChatService(
+     private val backgroundShellManager: BackgroundShellManager,
+     private val pluginManager: RikkaPluginManager? = null,
+ ) {
+-    private val builtinContext = BuiltinContextFeature { source, messages, prompt, beforeEffect ->
++    private val builtinContext = BuiltinContextFeature { source, messages, prompt, modelRequests ->
+         val turn = requestFactory.createContext(settingsStore.awaitLoaded(), source)
+-        requestFactory.generateCompressionSummary(turn, source.projectedContext(messages), prompt, beforeEffect)
++        requestFactory.generateCompressionSummary(turn, source.projectedContext(messages), prompt, modelRequests::dispatch)
+     }
+     private val operationDispatcher = SessionOperationDispatcher(listOf(builtinContext.operation),
+         packageAuthorization = { leases ->

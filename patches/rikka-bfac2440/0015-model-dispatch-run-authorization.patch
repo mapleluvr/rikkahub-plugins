@@ -1,4 +1,4 @@
-From 494d9c95150e8285e0021dfd9c28c32231daaeb5 Mon Sep 17 00:00:00 2001
+From 8cf31b495e5450b5c025488f43a44b6c5c431473 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Wed, 18 Nov 2026 03:03:30 +0800
 Subject: [PATCH] Separate model reservation from dispatch and bind packaged

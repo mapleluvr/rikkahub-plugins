@@ -1,4 +1,4 @@
-From ff83ae4410a39be6483869116511ce3722e6ce46 Mon Sep 17 00:00:00 2001
+From 8626323eecc51a54b27355a5e6876048e2e31685 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 14:10:17 +0800
 Subject: [PATCH] Integrate isolated packages, tool presentation and native

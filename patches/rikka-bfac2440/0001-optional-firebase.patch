@@ -1,4 +1,4 @@
-From 09cb016bf38985efceb837033ba4f1c9cfd6b3af Mon Sep 17 00:00:00 2001
+From a1b33e65706e26de76aadb04be9792613bfe2710 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 02:36:18 +0800
 Subject: [PATCH] Make Firebase integration optional for independently built
