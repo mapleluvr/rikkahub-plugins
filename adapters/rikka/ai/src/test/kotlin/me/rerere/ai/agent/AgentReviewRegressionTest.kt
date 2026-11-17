@@ -43,8 +43,20 @@ class AgentReviewRegressionTest {
             throw IllegalStateException("handler failed")
         })
         val tools = listOf(
-            UIMessagePart.Tool("denied", "action", "{}", approvalState = me.rerere.ai.ui.ToolApprovalState.Denied("no"), details = identity),
-            UIMessagePart.Tool("answered", "action", "{}", approvalState = me.rerere.ai.ui.ToolApprovalState.Answered("answer"), details = identity),
+            UIMessagePart.Tool(
+                "denied",
+                "action",
+                "{}",
+                approvalState = me.rerere.ai.ui.ToolApprovalState.Denied("no"),
+                details = identity
+            ),
+            UIMessagePart.Tool(
+                "answered",
+                "action",
+                "{}",
+                approvalState = me.rerere.ai.ui.ToolApprovalState.Answered("answer"),
+                details = identity
+            ),
             UIMessagePart.Tool("arguments", "action", "{", details = identity),
             UIMessagePart.Tool("handler", "action", "{}", details = identity),
         )

@@ -38,5 +38,10 @@ fun PluginHost.operationDefinitions(): List<ConversationOperation> = state.value
         }
     }
 
+fun PluginHost.authorizedPackages(leases: List<dev.rikkahub.plugins.protocol.PackageLease>): Boolean =
+    leases.all { lease ->
+        state.value.packages[lease.packageHash]?.let { authorized(lease, it.manifest.capabilities) } == true
+    }
+
 fun PluginHost.operationDispatcher(): SessionOperationDispatcher =
-    SessionOperationDispatcher(operationDefinitions(), ::authorized)
+    SessionOperationDispatcher(operationDefinitions(), packageAuthorization = ::authorizedPackages, authorized = ::authorized)

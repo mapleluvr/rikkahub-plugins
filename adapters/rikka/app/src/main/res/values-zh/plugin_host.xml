@@ -16,6 +16,9 @@
     <string name="plugin_host_expired">此面板已失效，请从插件列表重新打开。</string>
     <string name="plugin_host_accepted">操作已接收，可在下方查看进度。</string>
     <string name="plugin_host_receipts">操作与报告</string>
+    <string name="plugin_host_history_previous">上一页</string>
+    <string name="plugin_host_history_next">下一页</string>
+    <string name="plugin_host_history_page">第 %1$d / %2$d 页 · 共 %3$d 条记录</string>
     <string name="plugin_host_running">执行中</string>
     <string name="plugin_host_settled">已完成</string>
     <string name="plugin_host_prepared">等待执行</string>

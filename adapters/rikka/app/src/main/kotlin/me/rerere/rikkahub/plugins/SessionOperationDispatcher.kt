@@ -49,6 +49,7 @@ sealed interface OperationDispatch {
 /** One immutable registry snapshot. Feature policy, model prompts and artifact formats stay outside it. */
 class SessionOperationDispatcher(
     definitions: List<ConversationOperation>,
+    private val packageAuthorization: (List<PackageLease>) -> Boolean = { it.isEmpty() },
     private val authorized: (PackageLease, Set<String>) -> Boolean,
 ) {
     private val registry = definitions.associateBy { it.id to it.lease }
@@ -107,11 +108,44 @@ class SessionOperationDispatcher(
         }
     }
 
+    private fun validateRunPackages(current: Conversation, call: OperationCall) {
+        call.run?.let { ref ->
+            val saved = current.executionLedger().runs[ref.runId]
+            requireOperationAdmission(saved?.state?.ref == ref &&
+                saved.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE, "Owning run ended or changed")
+            if (!packageAuthorization(saved!!.pluginLeases)) {
+                throw OperationWaiting("Pinned plugin package authorization is unavailable")
+            }
+        }
+    }
+
+    private suspend fun markUnavailablePackages(session: ConversationSession, call: OperationCall) {
+        call.run?.let { ref ->
+            val saved = session.state.value.executionLedger().runs[ref.runId]
+            if (saved?.state?.ref == ref && saved.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE &&
+                !packageAuthorization(saved.pluginLeases)) {
+                SessionAgentRun.markPackageUnavailable(session, ref)
+            }
+        }
+    }
+
     suspend fun execute(
         session: ConversationSession,
         call: OperationCall,
         timeoutMillis: Long = 120_000,
     ): OperationResult {
+        require(call.target.conversationId == session.id.toString())
+        val prior = session.state.value.executionLedger().operations[call.id]
+        require(prior == null || prior.call == call) { "Command identity reused" }
+        // A stored result is history, not a new effect. Every unfinished attempt validates its owning leases.
+        if (prior?.status != AttemptStatus.SETTLED) {
+            try {
+                validateRunPackages(session.state.value, call)
+            } catch (waiting: OperationWaiting) {
+                markUnavailablePackages(session, call)
+                throw waiting
+            }
+        }
         val definition = requireNotNull(registry[call.type to call.handler]) { "Operation version is unavailable" }
         check(
             authorized(call.handler, definition.capabilities) &&
@@ -160,14 +194,7 @@ class SessionOperationDispatcher(
                         } != false),
                     "Operation authorization was revoked"
                 )
-                call.run?.let { ref ->
-                    val run = current.executionLedger().runs[ref.runId]
-                    requireOperationAdmission(
-                        run?.state?.ref == ref &&
-                            run.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE,
-                        "Owning run ended or changed"
-                    )
-                }
+                validateRunPackages(current, call)
                 val view = try {
                     current.forOperationFrame(call.frame)
                 } catch (changed: IllegalArgumentException) {
@@ -208,6 +235,7 @@ class SessionOperationDispatcher(
         } catch (error: Throwable) {
             withContext(NonCancellable) {
                 runCatching {
+                    markUnavailablePackages(session, call)
                     if (error is OperationAdmissionDenied) {
                         store.refusedBeforeEffect(call.id, error is OperationWaiting)
                     } else {

@@ -268,6 +268,120 @@ class SessionAgentRunTest {
         }
     }
 
+    @Test fun unverifiedRestoredPackageWithoutGateDoesNotDispatchModel() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("restored")))
+        val store = FakeConversationStore(initial)
+        val original = open(initial, store)
+        val lease = PackageLease("dev.example.plugin", "a".repeat(64), 1, Uuid.random().toString())
+        val first = SessionAgentRun.open(original, initial.currentMessages, pluginLeases = listOf(lease)) { _, _ ->
+            null
+        }
+        val restored = open(initial, store)
+        val resumed = SessionAgentRun.open(restored, restored.state.value.currentMessages) { _, _ -> null }
+        val provider = ScriptedProvider()
+        val plan = resumed.resumePlan()
+        val events = runAgent(resumed.bind(request(provider, plan.history), plan), resumed.hooks(hooks)).toList()
+        events.forEach { resumed.accept(it) }
+        assertEquals("An unverified package lease must block the first model effect", 0, provider.calls)
+        assertTrue(events.last() is AgentEvent.Yielded)
+        val saved = restored.state.value.executionLedger().runs.getValue(first.ref.runId)
+        assertEquals(first.ref, resumed.ref)
+        assertEquals(listOf(lease), saved.pluginLeases)
+        assertEquals(RunStatus.ACTIVE, saved.state.status)
+        assertEquals(0, saved.state.attemptsUsed)
+    }
+
+    @Test fun packageRevocationDuringPreparationPreventsModelAdmission() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("start")))
+        val store = FakeConversationStore(initial)
+        val session = open(initial, store)
+        val lease = PackageLease("dev.example.plugin", "a".repeat(64), 1, Uuid.random().toString())
+        var authorized = true
+        val run = SessionAgentRun.open(session, initial.currentMessages, pluginLeases = listOf(lease),
+            packageAuthorization = { authorized }) { _, _ -> null }
+        val provider = ScriptedProvider()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val preparing = object : AgentHooks by hooks {
+            override suspend fun prepareStep(messages: List<UIMessage>): StepRequest {
+                entered.complete(Unit)
+                release.await()
+                return hooks.prepareStep(messages)
+            }
+        }
+        val plan = run.resumePlan()
+        val execution = async {
+            runAgent(run.bind(request(provider, plan.history), plan), run.hooks(preparing)).toList()
+        }
+        entered.await()
+        authorized = false
+        release.complete(Unit)
+        val events = execution.await()
+        events.forEach { run.accept(it) }
+        assertTrue(events.last() is AgentEvent.Yielded)
+        assertEquals(0, provider.calls)
+        val saved = store.persisted!!.executionLedger().runs.getValue(run.ref.runId)
+        assertEquals(0, saved.state.attemptsUsed)
+        assertTrue("host.package-authorization" in saved.state.gates)
+        assertEquals(listOf(lease), saved.pluginLeases)
+    }
+
+    @Test fun packageRevocationAfterModelBlocksEvenNonPluginTools() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("start")))
+        val store = FakeConversationStore(initial)
+        val session = open(initial, store)
+        val lease = PackageLease("dev.example.plugin", "a".repeat(64), 1, Uuid.random().toString())
+        var authorized = true
+        val run = SessionAgentRun.open(session, initial.currentMessages, pluginLeases = listOf(lease),
+            packageAuthorization = { authorized }) { _, _ -> null }
+        val provider = ScriptedProvider().apply { firstTool = true }
+        var effects = 0
+        val tool = Tool(name = "effect", description = "effect", execute = { effects++; listOf(UIMessagePart.Text("done")) })
+        val revoking = object : AgentHooks by hooks {
+            override suspend fun finishStep(message: UIMessage, newPartsFrom: Int): UIMessage {
+                authorized = false
+                return message
+            }
+        }
+        val plan = run.resumePlan()
+        val events = runAgent(run.bind(request(provider, plan.history).copy(tools = listOf(tool)), plan),
+            run.hooks(revoking)).toList()
+        events.forEach { run.accept(it) }
+        assertEquals(1, provider.calls)
+        assertEquals(0, effects)
+        assertTrue(events.last() is AgentEvent.Yielded)
+        assertTrue("host.package-authorization" in store.persisted!!.executionLedger().runs
+            .getValue(run.ref.runId).state.gates)
+    }
+
+    @Test fun restoredOriginalAuthorityClearsOnlyPackageGateNotUserPause() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("start")))
+        val store = FakeConversationStore(initial)
+        val session = open(initial, store)
+        val lease = PackageLease("dev.example.plugin", "a".repeat(64), 1, Uuid.random().toString())
+        var authorized = false
+        val run = SessionAgentRun.open(session, initial.currentMessages, pluginLeases = listOf(lease),
+            packageAuthorization = { authorized }) { _, _ -> null }
+        SessionRunStore(session).addGate(run.ref, Gate("user", GateKind.USER_PAUSE))
+        authorized = true
+        val restored = open(initial, store)
+        val resumed = SessionAgentRun.open(restored, restored.state.value.currentMessages,
+            packageAuthorization = { authorized }) { _, _ -> null }
+        val provider = ScriptedProvider()
+        var plan = resumed.resumePlan()
+        val waiting = runAgent(resumed.bind(request(provider, plan.history), plan), resumed.hooks(hooks)).toList()
+        waiting.forEach { resumed.accept(it) }
+        assertEquals(0, provider.calls)
+        assertEquals(setOf("user"), restored.state.value.executionLedger().runs
+            .getValue(run.ref.runId).state.gates.keys)
+        SessionRunStore(restored).resolveGate(run.ref, "user")
+        plan = resumed.resumePlan()
+        runAgent(resumed.bind(request(provider, plan.history), plan), resumed.hooks(hooks)).collect(resumed::accept)
+        assertEquals(1, provider.calls)
+        assertEquals(run.ref, resumed.ref)
+        assertEquals(listOf(lease), restored.state.value.executionLedger().runs.getValue(run.ref.runId).pluginLeases)
+    }
+
     @Test fun reopenedRunRetainsItsPackageSelectionIncludingAnEmptySelection() = runBlocking {
         val old = PackageLease("dev.example.plugin", "a".repeat(64), 1)
         val updated = old.copy(packageHash = "b".repeat(64), activationEpoch = 2)

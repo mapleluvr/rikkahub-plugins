@@ -84,13 +84,18 @@ class PluginHostTest {
             val restored = second.activate(second.prepare(bytes), grants)
             assertEquals(old.lease.packageHash, restored.lease.packageHash)
             assertEquals(old.lease.activationEpoch, restored.lease.activationEpoch)
-            assertFalse("Fresh consent must not revive an imported run/approval lease", second.authorized(old.lease, grants))
+            assertFalse(
+                "Fresh consent must not revive an imported run/approval lease",
+                second.authorized(old.lease, grants)
+            )
             second.close()
             val reopened = PluginHost.open(context, secondRoot)
             try {
                 assertTrue(reopened.authorized(restored.lease, grants))
                 assertFalse(reopened.authorized(old.lease, grants))
-            } finally { reopened.close() }
+            } finally {
+                reopened.close()
+            }
         } finally {
             first.close()
             second.close()

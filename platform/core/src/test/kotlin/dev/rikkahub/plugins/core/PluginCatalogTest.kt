@@ -27,7 +27,9 @@ class PluginCatalogTest {
         assertEquals(old.lease.activationEpoch, fresh.lease.activationEpoch)
         assertFalse(second.authorized(old.lease, bytes.manifest.capabilities))
         assertTrue(second.authorized(fresh.lease, bytes.manifest.capabilities))
-        assertTrue(runCatching { PluginCatalog(second.state.value.copy(packages = first.state.value.packages)) {} }.isFailure)
+        assertTrue(runCatching {
+            PluginCatalog(second.state.value.copy(packages = first.state.value.packages)) {}
+        }.isFailure)
         // Existing catalogs keep their legacy identity; imported conversation data grants nothing.
         val legacy = PluginCatalog(PluginCatalogState()) {}
         val retained = legacy.activate(bytes, bytes.manifest.capabilities, 0)

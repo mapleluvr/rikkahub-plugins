@@ -26,6 +26,7 @@ data class SessionResumePlan(
 class SessionAgentRun private constructor(
     private val session: ConversationSession,
     val ref: RunRef,
+    private val packageAuthorization: (List<PackageLease>) -> Boolean,
     private val policy: suspend (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
 ) {
     private val store = SessionRunStore(session)
@@ -40,12 +41,29 @@ class SessionAgentRun private constructor(
     val pluginLeases: List<PackageLease> get() = snapshot().pluginLeases
 
     private fun snapshot() = session.state.value.executionLedger().runs.getValue(ref.runId)
-    private fun blocked(): String? = snapshot().state.let {
+    private fun blocked(): String? = snapshot().let { saved ->
         when {
-            it.status != RunStatus.ACTIVE -> "Run ended"
-            it.gates.isNotEmpty() -> "Run has unresolved gates"
+            saved.state.status != RunStatus.ACTIVE -> "Run ended"
+            !packageAuthorization(saved.pluginLeases) -> "Pinned plugin package authorization is unavailable"
+            saved.state.gates.keys.any { it != PACKAGE_GATE } -> "Run has unresolved gates"
             else -> null
         }
+    }
+
+    /** Only this host-owned gate can clear after the original leases are revalidated. */
+    private fun RunCheckpoint.withPackageGate(): RunCheckpoint {
+        if (state.status != RunStatus.ACTIVE) return this
+        val confirmed = if (packageAuthorization(pluginLeases)) {
+            RunControl.resolveGate(state, PACKAGE_GATE)
+        } else {
+            RunControl.addGate(state, Gate(PACKAGE_GATE, GateKind.PLUGIN_FAULT))
+        }
+        return if (confirmed == state) this else copy(state = confirmed)
+    }
+
+    private suspend fun reconcilePackageGate() {
+        val saved = snapshot()
+        if (saved.withPackageGate() != saved) store.update(ref) { it.withPackageGate() }
     }
 
     /** Called after open consumes any settled operation, once for each execution segment. */
@@ -125,7 +143,7 @@ class SessionAgentRun private constructor(
             }
 
             override suspend fun prepareModel(step: Int, attempt: Int): String? =
-                staleInput() ?: store.admit(ref, step, preparedFrame).reason
+                blocked() ?: staleInput() ?: store.admit(ref, step, preparedFrame).reason
 
             override fun admitModel(step: Int, attempt: Int): String? = blocked() ?: staleInput()
                 ?: if (snapshot().state.frameRevision != preparedFrame) "Prepared request is stale" else null
@@ -169,6 +187,8 @@ class SessionAgentRun private constructor(
                                 previous.input != part.input || previous.toolName != part.toolName ||
                                     previous.approvalState != part.approvalState || previous.startedAt != null ->
                                     "Tool approval or input changed before effect"
+
+                                !packageAuthorization(saved.pluginLeases) -> "Plugin package authorization changed"
 
                                 saved.state.status != RunStatus.ACTIVE || saved.state.gates.isNotEmpty() ||
                                     saved.state.frameRevision != preparedFrame -> "Tool admission changed"
@@ -320,7 +340,7 @@ class SessionAgentRun private constructor(
     private suspend fun saveCursor(value: AgentCursor) {
         store.update(ref) { old ->
             require(value.nextStep in old.nextStep..old.state.stepsUsed)
-            old.copy(
+            old.withPackageGate().copy(
                 boundary = value.boundary.name,
                 nextStep = value.nextStep,
                 toolCallId = value.toolCallId,
@@ -331,11 +351,24 @@ class SessionAgentRun private constructor(
     }
 
     companion object {
+        private const val PACKAGE_GATE = "host.package-authorization"
+
+        internal suspend fun markPackageUnavailable(session: ConversationSession, ref: RunRef) {
+            SessionRunStore(session).update(ref) { saved ->
+                if (saved.state.status == RunStatus.ACTIVE) {
+                    saved.copy(state = RunControl.addGate(saved.state, Gate(PACKAGE_GATE, GateKind.PLUGIN_FAULT)))
+                } else {
+                    saved
+                }
+            }
+        }
+
         suspend fun open(
             session: ConversationSession,
             history: List<UIMessage>,
             initialReplyNodeId: Uuid? = null,
             pluginLeases: List<PackageLease> = emptyList(),
+            packageAuthorization: (List<PackageLease>) -> Boolean = { it.isEmpty() },
             policy: suspend (AgentBoundaryContext, RunRef) -> BoundaryOperation?,
         ): SessionAgentRun {
             val branch =
@@ -364,7 +397,8 @@ class SessionAgentRun private constructor(
                     pluginLeases = pluginLeases,
                 ))
             }
-            return SessionAgentRun(session, saved.state.ref, policy).also { controller ->
+            return SessionAgentRun(session, saved.state.ref, packageAuthorization, policy).also { controller ->
+                controller.reconcilePackageGate()
                 if (previous != null) {
                     controller.pending = saved.pendingOperation
                     controller.cursor = AgentCursor(

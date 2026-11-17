@@ -7,7 +7,7 @@ import me.rerere.rikkahub.data.model.Conversation
 
 /** Only host admission can claim that an effect was definitely refused before dispatch. */
 internal open class OperationAdmissionDenied(message: String) : IllegalStateException(message)
-internal class OperationWaiting : OperationAdmissionDenied("Owning run has another unresolved gate")
+internal class OperationWaiting(message: String = "Owning run has another unresolved gate") : OperationAdmissionDenied(message)
 
 internal fun requireOperationAdmission(allowed: Boolean, message: String) {
     if (!allowed) throw OperationAdmissionDenied(message)

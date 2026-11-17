@@ -2,12 +2,15 @@ package me.rerere.rikkahub.plugins
 
 import android.content.Context
 import dev.rikkahub.plugins.core.GitHubPluginResolver
+import dev.rikkahub.plugins.core.PluginInstallationMigration
 import dev.rikkahub.plugins.runtime.PluginHost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import java.io.File
 
 sealed interface PluginHostLoad {
@@ -24,7 +27,13 @@ class RikkaPluginManager(context: Context, scope: CoroutineScope) {
     val state = mutable.asStateFlow()
     private val initialization = scope.async(start = CoroutineStart.LAZY) {
         try {
-            PluginHost.open(context, File(context.filesDir, "plugin-host")).also {
+            val root = withContext(Dispatchers.IO) {
+                PluginInstallationMigration.prepare(
+                    File(context.filesDir, "plugin-host").toPath(),
+                    File(context.noBackupFilesDir, "plugin-host").toPath()
+                ).toFile()
+            }
+            PluginHost.open(context, root).also {
                 mutable.value = PluginHostLoad.Ready(it)
             }
         } catch (error: Exception) {

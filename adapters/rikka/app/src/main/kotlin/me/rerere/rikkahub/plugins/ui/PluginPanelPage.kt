@@ -2,6 +2,7 @@ package me.rerere.rikkahub.plugins.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
@@ -13,9 +14,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -46,7 +49,12 @@ import kotlin.uuid.Uuid
 
 @Composable
 fun PluginPanelPage(
-    pluginId: String, hash: String, epoch: Long, panelId: String, conversationId: String?, issuerId: String = ""
+    pluginId: String,
+    hash: String,
+    epoch: Long,
+    panelId: String,
+    conversationId: String?,
+    issuerId: String = ""
 ) {
     PluginPageFrame(stringResource(R.string.plugin_host_title)) {
         PluginHostContent { host ->
@@ -161,11 +169,15 @@ internal fun PluginReceipts(conversation: Conversation?, pluginId: String?, serv
     val scope = rememberCoroutineScope()
     conversation?.let { current ->
         val frame = current.currentMessages.map { it.sourceStamp() }
+        val records = current.executionLedger().operations.values.filter {
+            (pluginId == null || it.call.handler.pluginId == pluginId) &&
+                frame.take(it.call.frame.size).map { stamp -> stamp.id } == it.call.frame.map { stamp -> stamp.id }
+        }.reversed()
+        var page by rememberSaveable(current.id, pluginId) { mutableIntStateOf(0) }
+        val lastPage = maxOf(0, (records.size - 1) / 10)
+        val currentPage = page.coerceIn(0, lastPage)
         PluginCard(stringResource(R.string.plugin_host_receipts)) {
-            for (record in current.executionLedger().operations.values.filter {
-                (pluginId == null || it.call.handler.pluginId == pluginId) &&
-                    frame.take(it.call.frame.size).map { stamp -> stamp.id } == it.call.frame.map { stamp -> stamp.id }
-            }.takeLast(10).reversed()) {
+            for (record in records.drop(currentPage * 10).take(10)) {
                 val label = when (record.status) {
                     AttemptStatus.PREPARED -> R.string.plugin_host_prepared
                     AttemptStatus.RUNNING -> R.string.plugin_host_running
@@ -188,6 +200,15 @@ internal fun PluginReceipts(conversation: Conversation?, pluginId: String?, serv
                     Text(stringResource(R.string.plugin_host_receipt_details))
                 }
                 if (expanded) Text(JsonInstantPretty.encodeToString(record))
+            }
+            Text(stringResource(R.string.plugin_host_history_page, currentPage + 1, lastPage + 1, records.size))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { page = currentPage - 1 }, enabled = currentPage > 0) {
+                    Text(stringResource(R.string.plugin_host_history_previous))
+                }
+                TextButton(onClick = { page = currentPage + 1 }, enabled = currentPage < lastPage) {
+                    Text(stringResource(R.string.plugin_host_history_next))
+                }
             }
             OutlinedButton(onClick = { scope.launch { service.stopGeneration(current.id) } }) {
                 Text(stringResource(R.string.plugin_host_stop))

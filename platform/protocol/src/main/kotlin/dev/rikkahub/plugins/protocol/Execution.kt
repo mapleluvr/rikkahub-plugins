@@ -12,7 +12,9 @@ data class BranchRef(val conversationId: String, val branchId: String)
 
 @Serializable
 data class PackageLease(
-    val pluginId: String, val packageHash: String, val activationEpoch: Long,
+    val pluginId: String,
+    val packageHash: String,
+    val activationEpoch: Long,
     /** Independent installation identity; empty only for pre-namespace catalogs. */
     val issuerId: String = "",
 )

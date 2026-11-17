@@ -464,6 +464,30 @@
     {
       "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PackageRecoveryUiTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PackageRecoveryUiTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginInstallationStorageTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginInstallationStorageTest.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginInstallationMigration.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginInstallationMigration.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PackageAuthorizationRecoveryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PackageAuthorizationRecoveryTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginHistoryPagingTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginHistoryPagingTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/RunPackageOperationAdmissionTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/RunPackageOperationAdmissionTest.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/PluginInstallationMigrationTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/PluginInstallationMigrationTest.kt"
     }
   ]
 }

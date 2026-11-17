@@ -125,7 +125,8 @@ class PackageRecoveryUiTest {
             if (active) {
                 click(label(R.string.plugin_host_adopt))
                 compose.waitUntil(20_000) {
-                    service.getConversationFlow(initial.id).value.packageSelection()?.packages?.get(pkg.manifest.id) == pkg.hash
+                    service.getConversationFlow(initial.id).value.packageSelection()?.packages?.get(pkg.manifest.id) ==
+                        pkg.hash
                 }
                 assertEquals(
                     RunStatus.CANCELLED,

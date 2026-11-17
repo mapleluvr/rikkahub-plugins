@@ -16,6 +16,9 @@
     <string name="plugin_host_expired">This panel is unavailable. Reopen it from the plugin list.</string>
     <string name="plugin_host_accepted">Operation accepted. Its progress appears below.</string>
     <string name="plugin_host_receipts">Operations and reports</string>
+    <string name="plugin_host_history_previous">Previous page</string>
+    <string name="plugin_host_history_next">Next page</string>
+    <string name="plugin_host_history_page">Page %1$d of %2$d · %3$d records</string>
     <string name="plugin_host_running">Running</string>
     <string name="plugin_host_settled">Completed</string>
     <string name="plugin_host_prepared">Waiting</string>
