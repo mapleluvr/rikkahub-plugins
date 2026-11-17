@@ -18,40 +18,38 @@ import kotlin.uuid.Uuid
 
 internal const val TOOL_APPROVAL_GATE = "host.tool-approval"
 
-/** Persist requests and their visible handles in the same confirmed transaction. */
-internal suspend fun ConversationSession.requestToolApprovals(ref: RunRef, expected: UIMessage) {
-    commitExtension { current ->
-        val ledger = current.executionLedger()
-        val run = ledger.runs.getValue(ref.runId)
-        check(run.state.ref == ref && run.state.status == RunStatus.ACTIVE)
-        val message = current.messageNodes.flatMap { it.messages }.single { it.id == expected.id }
-        check(message == expected) { "Approval source changed before publication" }
-        val requests = run.approvalRequests.toMutableMap()
-        val updated = message.copy(parts = message.parts.map { part ->
-            if (part !is UIMessagePart.Tool || !part.isPending) return@map part
-            val call = ToolCallStamp(part.toolCallId, part.toolName, part.input)
-            val definition = run.toolDefinitions.getValue(part.toolName)
-            val existing = part.approvalId?.let(requests::get)?.takeIf {
-                it.messageId == message.id.toString() && it.call == call &&
-                    it.definition == definition && it.decision == null
-            }
-            val request = existing ?: ToolApprovalRequestRecord(
-                Uuid.random().toString(),
-                message.id.toString(),
-                call,
-                definition
-            )
-            requests[request.id] = request
-            part.copy(approvalId = request.id)
-        })
-        current.replaceApprovalMessage(updated).withExecutionLedger(ledger.copy(
-            runs = ledger.runs +
-                (ref.runId to run.copy(
-                    approvalRequests = requests,
-                    state = RunControl.addGate(run.state, Gate(TOOL_APPROVAL_GATE, GateKind.TOOL_APPROVAL)),
-                ))
+/** Pure part of the message/cursor transaction; the first visible Pending already has its handle. */
+internal fun Conversation.withToolApprovalRequests(ref: RunRef, messageId: Uuid): Conversation {
+    val ledger = executionLedger()
+    val run = ledger.runs.getValue(ref.runId)
+    check(run.state.ref == ref && run.state.status == RunStatus.ACTIVE)
+    check(messageId.toString() in run.inputIds && run.messageId == messageId.toString())
+    val message = messageNodes.flatMap { it.messages }.single { it.id == messageId }
+    if (message.getTools().none { it.isPending }) return this
+    check(run.boundary == "ToolPreflight")
+    check(message.getTools().map { ToolCallStamp(it.toolCallId, it.toolName, it.input) } == run.toolBatch)
+    val requests = run.approvalRequests.toMutableMap()
+    val updated = message.copy(parts = message.parts.map { part ->
+        if (part !is UIMessagePart.Tool || !part.isPending) return@map part
+        check(part.startedAt == null) { "Started tool cannot request fresh approval" }
+        val call = ToolCallStamp(part.toolCallId, part.toolName, part.input)
+        val definition = run.toolDefinitions.getValue(part.toolName)
+        val existing = part.approvalId?.let(requests::get)?.takeIf {
+            it.messageId == message.id.toString() && it.call == call &&
+                it.definition == definition && it.decision == null
+        }
+        check(part.approvalId == null || existing != null) { "Approval binding changed" }
+        val request =
+            existing ?: ToolApprovalRequestRecord(Uuid.random().toString(), message.id.toString(), call, definition)
+        requests[request.id] = request
+        part.copy(approvalId = request.id)
+    })
+    return replaceApprovalMessage(updated).withExecutionLedger(ledger.copy(
+        runs = ledger.runs + (ref.runId to run.copy(
+            approvalRequests = requests,
+            state = RunControl.addGate(run.state, Gate(TOOL_APPROVAL_GATE, GateKind.TOOL_APPROVAL)),
         ))
-    }
+    ))
 }
 
 /** Returns false for stale clicks, another conversation, ended runs, edited calls, or duplicate replies. */
@@ -70,31 +68,41 @@ suspend fun ConversationSession.respondToToolApproval(id: String, decision: Tool
 }
 
 internal fun Conversation.withBoundToolApproval(id: String, decision: ToolApprovalState): Conversation? {
-    require(decision is ToolApprovalState.Approved || decision is ToolApprovalState.Denied ||
-        decision is ToolApprovalState.Answered)
+    require(
+        decision is ToolApprovalState.Approved || decision is ToolApprovalState.Denied ||
+            decision is ToolApprovalState.Answered
+    )
     val ledger = executionLedger()
     val run = ledger.runs.values.singleOrNull {
         it.state.status == RunStatus.ACTIVE && id in it.approvalRequests
     } ?: return null
     val request = run.approvalRequests.getValue(id)
     if (request.decision != null || request.messageId !in run.inputIds ||
-        request.definition != run.toolDefinitions[request.call.name]) return null
+        request.definition != run.toolDefinitions[request.call.name]) {
+        return null
+    }
     val message = messageNodes.flatMap { it.messages }
         .singleOrNull { it.id.toString() == request.messageId } ?: return null
     val tool = message.getTools().singleOrNull { it.toolCallId == request.call.id } ?: return null
     if (!tool.isPending || tool.startedAt != null || tool.approvalId != id ||
-        request.call != ToolCallStamp(tool.toolCallId, tool.toolName, tool.input)) return null
+        request.call != ToolCallStamp(tool.toolCallId, tool.toolName, tool.input)) {
+        return null
+    }
     val updated = message.copy(parts = message.parts.map { part ->
         if (part === tool) tool.copy(approvalState = decision) else part
     })
     val state = if (updated.getTools().none { it.isPending }) {
         RunControl.resolveGate(run.state, TOOL_APPROVAL_GATE)
-    } else run.state
-    return replaceApprovalMessage(updated).withExecutionLedger(ledger.copy(runs = ledger.runs +
-        (run.state.ref.runId to run.copy(
-            state = state,
-            approvalRequests = run.approvalRequests + (id to request.copy(decision = decisionKey(decision))),
-        ))))
+    } else {
+        run.state
+    }
+    return replaceApprovalMessage(updated).withExecutionLedger(ledger.copy(
+        runs = ledger.runs +
+            (run.state.ref.runId to run.copy(
+                state = state,
+                approvalRequests = run.approvalRequests + (id to request.copy(decision = decisionKey(decision))),
+            ))
+    ))
 }
 
 internal fun RunCheckpoint.approvalFailure(message: UIMessage, tool: UIMessagePart.Tool): String? {

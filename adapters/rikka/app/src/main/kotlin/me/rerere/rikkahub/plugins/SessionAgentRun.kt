@@ -4,6 +4,7 @@ import dev.rikkahub.plugins.core.RunControl
 import dev.rikkahub.plugins.protocol.*
 import me.rerere.ai.agent.*
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.uniqueToolRegistrations
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.service.ConversationSession
 import kotlin.uuid.Uuid
@@ -70,8 +71,8 @@ class SessionAgentRun private constructor(
     fun bind(request: AgentRequest, nodeId: Uuid): AgentRequest {
         val saved = snapshot()
         replyNodeId = saved.replyNodeId?.let(Uuid::parse) ?: nodeId
-        val definitions = request.tools.associate { tool ->
-            tool.name to listOf(
+        val definitions = request.tools.uniqueToolRegistrations().mapValues { (_, tool) ->
+            listOf(
                 tool.executionVersion,
                 tool.name,
                 tool.description,
@@ -133,12 +134,28 @@ class SessionAgentRun private constructor(
                 blocked() ?: snapshot().approvalFailure(message, tool)
                     ?: if (snapshot().state.frameRevision != preparedFrame) "Tool admission changed" else null
 
-            override suspend fun checkpoint(message: UIMessage, next: AgentCursor): String? {
+            override suspend fun checkpoint(message: UIMessage, next: AgentCursor): AgentCheckpoint {
                 var rejected: String? = null
-                session.commitExtension { current ->
+                val committed = session.commitExtension { current ->
                     val ledger = current.executionLedger()
                     val saved = ledger.runs.getValue(ref.runId)
                     require(next.nextStep in saved.nextStep..saved.state.stepsUsed)
+                    if (message.getTools().any { it.isPending }) {
+                        val previous = current.messageNodes.flatMap { it.messages }.single { it.id == message.id }
+                        check(saved.toolDefinitions == definitions && saved.state.status == RunStatus.ACTIVE)
+                        check(
+                            previous.getTools().map { ToolCallStamp(it.toolCallId, it.toolName, it.input) } ==
+                                message.getTools().map { ToolCallStamp(it.toolCallId, it.toolName, it.input) }
+                        ) {
+                            "Approval input changed before publication"
+                        }
+                        check(previous.getTools().zip(message.getTools()).all { (before, after) ->
+                            before.startedAt == after.startedAt && before.output == after.output &&
+                                before.approvalId == after.approvalId &&
+                                (before.approvalState == after.approvalState ||
+                                    (before.approvalState == me.rerere.ai.ui.ToolApprovalState.Auto && after.isPending))
+                        }) { "Approval authority changed before publication" }
+                    }
                     var permits = saved.consumedToolPermits
                     if (next.boundary == AgentBoundary.BeforeTool && next.toolCallId != null) {
                         val part = message.getTools().single { it.toolCallId == next.toolCallId }
@@ -193,9 +210,12 @@ class SessionAgentRun private constructor(
                     )
                     current.upsertMessage(replyNodeId, message)
                         .withExecutionLedger(ledger.copy(runs = ledger.runs + (ref.runId to checkpoint)))
+                        .withToolApprovalRequests(ref, message.id)
                 }
-                if (rejected == null) cursor = next
-                return rejected
+                rejected?.let { return AgentCheckpoint.Rejected(it) }
+                cursor = next
+                val confirmedMessage = committed.messageNodes.flatMap { it.messages }.single { it.id == message.id }
+                return AgentCheckpoint.Committed(confirmedMessage)
             }
         }
         return request.copy(
@@ -235,9 +255,8 @@ class SessionAgentRun private constructor(
 
             is AgentEvent.Finished -> {
                 if (event.reason is AgentFinishReason.AwaitingApproval) {
-                    val next = event.message.cursor(AgentBoundary.ToolPreflight, event.completedSteps)
-                    saveCursor(next)
-                    session.requestToolApprovals(ref, event.message)
+                    // Publication, handles, gate and cursor were confirmed together by checkpoint().
+                    check(event.message.getTools().filter { it.isPending }.all { it.approvalId != null })
                 } else {
                     store.update(ref) { old ->
                         old.copy(
@@ -367,12 +386,3 @@ class SessionAgentRun private constructor(
         }
     }
 }
-
-private fun UIMessage.cursor(boundary: AgentBoundary, step: Int) = AgentCursor(
-    boundary,
-    step,
-    messageId = id.toString(),
-    toolBatch = getTools().map {
-        AgentToolBinding(it.toolCallId, it.toolName, it.input)
-    }
-)

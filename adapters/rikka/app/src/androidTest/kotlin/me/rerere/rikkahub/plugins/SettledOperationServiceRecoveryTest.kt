@@ -110,7 +110,7 @@ class SettledOperationServiceRecoveryTest {
             // ChatService has never loaded this session: it must read the checkpoint from Room itself.
             service.addConversationReference(id)
             referenced = true
-            service.regenerateAtMessage(id, reply.id)
+            service.resumePluginRun(id)
             withTimeout(15000) { service.getGenerationJobStateFlow(id).first { it == null } }
             assertEquals(service.errors.value.filter { it.conversationId == id }.toString(), 1, bodies.size)
             val wire = bodies.single().getValue("messages").jsonArray.toString()

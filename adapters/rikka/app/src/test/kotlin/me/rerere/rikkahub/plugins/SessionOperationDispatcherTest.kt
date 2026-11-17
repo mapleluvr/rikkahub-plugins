@@ -47,7 +47,8 @@ class SessionOperationDispatcherTest {
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             var enabled = true
-            val feature = BuiltinContextFeature { _, _, _, _ ->
+            val feature = BuiltinContextFeature { _, _, _, admit ->
+                admit()
                 entered.complete(Unit)
                 release.await()
                 "late summary"
@@ -64,7 +65,10 @@ class SessionOperationDispatcherTest {
             release.complete(Unit)
             assertTrue(work.await().isFailure)
             assertTrue(session.state.value.currentMessages.none { it.isContextCheckpoint })
-            assertEquals(AttemptStatus.UNKNOWN, store.persisted!!.executionLedger().operations.getValue(call.id).status)
+            val receipt = store.persisted!!.executionLedger().operations.getValue(call.id)
+            assertEquals(1, receipt.effectAdmissions)
+            assertEquals(1, receipt.modelAttempts)
+            assertEquals(AttemptStatus.UNKNOWN, receipt.status)
         }
     }
 

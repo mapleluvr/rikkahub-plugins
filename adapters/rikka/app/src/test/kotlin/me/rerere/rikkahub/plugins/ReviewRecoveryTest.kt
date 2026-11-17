@@ -82,7 +82,10 @@ class ReviewRecoveryTest {
                 val release = CompletableDeferred<Unit>()
                 var effects = 0
                 val operation = ConversationOperation(
-                    "test/race", "Race", PackageLease("test", "v1", 1), emptySet()
+                    "test/race",
+                    "Race",
+                    PackageLease("test", "v1", 1),
+                    emptySet()
                 ) { c, _ ->
                     PreparedConversationOperation(c.pluginSources(), execute = { invocation ->
                         suspend fun effect() {

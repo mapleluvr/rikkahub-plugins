@@ -26,8 +26,8 @@ import me.rerere.rikkahub.plugins.executionLedger
 import me.rerere.rikkahub.plugins.forInputPath
 import me.rerere.rikkahub.plugins.pluginSources
 import me.rerere.rikkahub.plugins.sourceStamp
-import java.security.MessageDigest
 import me.rerere.rikkahub.utils.JsonInstant
+import java.security.MessageDigest
 import java.util.Locale
 
 @Serializable
@@ -119,7 +119,9 @@ class BuiltinContextFeature(
         if (records.values.any { record ->
                 (record.call.id == prefix || record.call.id.startsWith("$prefix/")) &&
                     record.status != dev.rikkahub.plugins.protocol.AttemptStatus.CANCELLED
-            }) return null
+            }) {
+            return null
+        }
         val messages = conversation.currentMessages.map { if (it.id == last.id) last else it }
         val condition = buildString {
             append("${model.id}:${model.contextLength}:${settings.autoCompressThreshold}\n")

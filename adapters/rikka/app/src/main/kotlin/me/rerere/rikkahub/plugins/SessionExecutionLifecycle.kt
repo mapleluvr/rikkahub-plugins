@@ -5,8 +5,8 @@ import dev.rikkahub.plugins.core.RunControl
 import dev.rikkahub.plugins.protocol.*
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
-import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.service.ConversationSession
 import me.rerere.rikkahub.utils.JsonInstant
@@ -39,7 +39,28 @@ fun Conversation.recoverPluginExecution(): Conversation {
     } else {
         decoded
     }
-    val recovered = OperationLedger.recover(ledger)
+    val recovered = OperationLedger.recover(ledger).let { records ->
+        val messages = messageNodes.flatMap { it.messages }.associateBy { it.id.toString() }
+        records.copy(runs = records.runs.mapValues { (_, run) ->
+            val unboundPending = run.inputIds.mapNotNull(messages::get).any { message ->
+                message.getTools().any { tool ->
+                    val request = tool.approvalId?.let(run.approvalRequests::get)
+                    tool.isPending && (request == null || request.decision != null ||
+                        request.messageId != message.id.toString() ||
+                        request.call != ToolCallStamp(tool.toolCallId, tool.toolName, tool.input) ||
+                        request.definition != run.toolDefinitions[tool.toolName])
+                }
+            }
+            if (run.state.status == RunStatus.ACTIVE && unboundPending) {
+                run.copy(state = RunControl.addGate(run.state, Gate(
+                    "host.approval-publication-incomplete",
+                    GateKind.PLUGIN_FAULT
+                )))
+            } else {
+                run
+            }
+        })
+    }
     if (recovered == decoded) return this
     val migrated = withExecutionLedger(recovered)
     return if (decoded.version == 2) {
@@ -74,18 +95,27 @@ suspend fun ConversationSession.cancelPluginRuns() {
         val ownedMessages = cancelled.flatMap { it.inputIds + listOfNotNull(it.messageId) }.toSet()
         val messages = current.messageNodes.map { node ->
             node.copy(messages = node.messages.map { message ->
-                if (message.id.toString() !in ownedMessages) message else message.copy(parts = message.parts.map { part ->
-                    if (part is UIMessagePart.Tool && !part.isExecuted && part.startedAt == null) {
-                        part.copy(
-                            approvalId = null,
-                            approvalState = ToolApprovalState.Denied("Run stopped"),
-                            output = listOf(UIMessagePart.Text("Tool cancelled before execution by user Stop.")),
-                        )
-                    } else part
-                })
+                if (message.id.toString() !in
+                    ownedMessages) {
+                    message
+                } else {
+                    message.copy(parts = message.parts.map { part ->
+                        if (part is UIMessagePart.Tool && !part.isExecuted && part.startedAt == null) {
+                            part.copy(
+                                approvalId = null,
+                                approvalState = ToolApprovalState.Denied("Run stopped"),
+                                output = listOf(UIMessagePart.Text("Tool cancelled before execution by user Stop.")),
+                            )
+                        } else {
+                            part
+                        }
+                    })
+                }
             })
         }
-        current.copy(messageNodes = messages).withExecutionLedger(ledger.copy(runs = ledger.runs.mapValues { (_, checkpoint) ->
+        current.copy(
+            messageNodes = messages
+        ).withExecutionLedger(ledger.copy(runs = ledger.runs.mapValues { (_, checkpoint) ->
             checkpoint.copy(state = RunControl.cancel(checkpoint.state))
         }))
     }

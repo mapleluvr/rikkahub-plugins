@@ -133,8 +133,10 @@ class SessionOperationDispatcher(
         require(call.frame.isNotEmpty() || snapshot.messageNodes.isEmpty()) { "Operation has no bound input frame" }
         val bound = snapshot.forOperationFrame(call.frame)
         val prepared = definition.prepare(bound, call.input)
-        require(prepared.displaySourceIds.distinct().size == prepared.displaySourceIds.size &&
-            call.frame.map { it.id }.containsAll(prepared.displaySourceIds)) { "Invalid display source path" }
+        require(
+            prepared.displaySourceIds.distinct().size == prepared.displaySourceIds.size &&
+                call.frame.map { it.id }.containsAll(prepared.displaySourceIds)
+        ) { "Invalid display source path" }
         val store = SessionOperationStore(session)
         val record = store.prepare(call, prepared.sources)
         if (record.status == AttemptStatus.SETTLED) return checkNotNull(record.result)
@@ -151,20 +153,28 @@ class SessionOperationDispatcher(
                 prepared.execute
             )))
             fun validate(current: Conversation) {
-                check(
+                requireOperationAdmission(
                     authorized(call.handler, definition.capabilities) &&
                         (call.caller?.let {
                             authorized(it, definition.capabilities)
-                        } != false)
-                ) { "Operation authorization was revoked" }
+                        } != false),
+                    "Operation authorization was revoked"
+                )
                 call.run?.let { ref ->
                     val run = current.executionLedger().runs[ref.runId]
-                    requireOperationAdmission(run?.state?.ref == ref &&
-                        run.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE, "Owning run ended or changed")
+                    requireOperationAdmission(
+                        run?.state?.ref == ref &&
+                            run.state.status == dev.rikkahub.plugins.protocol.RunStatus.ACTIVE,
+                        "Owning run ended or changed"
+                    )
                 }
-                val view = current.forOperationFrame(call.frame)
+                val view = try {
+                    current.forOperationFrame(call.frame)
+                } catch (changed: IllegalArgumentException) {
+                    throw OperationAdmissionDenied(changed.message ?: "Operation input changed")
+                }
                 val sources = view.pluginSources().associateBy { it.id }
-                check(prepared.sources.all { sources[it.id] == it }) { "Operation source changed" }
+                requireOperationAdmission(prepared.sources.all { sources[it.id] == it }, "Operation source changed")
                 prepared.validateAdoption(view)
             }
             val result = runner.execute(
@@ -200,7 +210,9 @@ class SessionOperationDispatcher(
                 runCatching {
                     if (error is OperationAdmissionDenied) {
                         store.refusedBeforeEffect(call.id, error is OperationWaiting)
-                    } else store.cancel(call.id)
+                    } else {
+                        store.cancel(call.id)
+                    }
                 }.exceptionOrNull()?.let(error::addSuppressed)
             }
             throw error

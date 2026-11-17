@@ -103,15 +103,20 @@ class SessionOperationStore(private val session: ConversationSession) {
             val record = ledger.operations.getValue(call.id)
             check(record.status == dev.rikkahub.plugins.protocol.AttemptStatus.RUNNING)
             current.requireOperationEffectAllowed(call)
-            requireOperationAdmission(record.modelAttempts < record.maxModelAttempts, "Operation request budget exhausted")
+            requireOperationAdmission(
+                record.modelAttempts < record.maxModelAttempts,
+                "Operation request budget exhausted"
+            )
             var runs = ledger.runs
             call.run?.let { ref ->
                 val run = runs.getValue(ref.runId)
                 val state = run.state
                 requireOperationAdmission(state.attemptsUsed < state.maxAttempts, "Owning run request budget exhausted")
                 val newStep = if (record.modelAttempts == 0) 1 else 0
-                requireOperationAdmission(state.stepsUsed + state.operationStepsUsed + newStep <= state.maxSteps,
-                    "Owning run model budget exhausted")
+                requireOperationAdmission(
+                    state.stepsUsed + state.operationStepsUsed + newStep <= state.maxSteps,
+                    "Owning run model budget exhausted"
+                )
                 runs = runs + (ref.runId to run.copy(state = state.copy(
                     attemptsUsed = state.attemptsUsed + 1,
                     operationStepsUsed = state.operationStepsUsed + newStep,
@@ -121,7 +126,9 @@ class SessionOperationStore(private val session: ConversationSession) {
             current.withExecutionLedger(ledger.copy(
                 runs = runs,
                 operations = ledger.operations + (call.id to record.copy(
-                    modelAttempts = record.modelAttempts + 1, effectAdmissions = record.effectAdmissions + 1)),
+                    modelAttempts = record.modelAttempts + 1,
+                    effectAdmissions = record.effectAdmissions + 1
+                )),
             ))
         }
     }
@@ -133,8 +140,10 @@ class SessionOperationStore(private val session: ConversationSession) {
             val ledger = current.executionLedger()
             val record = ledger.operations.getValue(call.id)
             check(record.status == dev.rikkahub.plugins.protocol.AttemptStatus.RUNNING)
-            current.withExecutionLedger(ledger.copy(operations = ledger.operations +
-                (call.id to record.copy(effectAdmissions = record.effectAdmissions + 1))))
+            current.withExecutionLedger(ledger.copy(
+                operations = ledger.operations +
+                    (call.id to record.copy(effectAdmissions = record.effectAdmissions + 1))
+            ))
         }
     }
 
@@ -146,11 +155,16 @@ class SessionOperationStore(private val session: ConversationSession) {
             if (record.effectAdmissions == 0 && record.modelAttempts == 0 &&
                 record.status == dev.rikkahub.plugins.protocol.AttemptStatus.RUNNING) {
                 current.withExecutionLedger(ledger.copy(operations = ledger.operations + (id to record.copy(
-                    status = if (waiting) dev.rikkahub.plugins.protocol.AttemptStatus.PREPARED
-                        else dev.rikkahub.plugins.protocol.AttemptStatus.CANCELLED,
+                    status = if (waiting) {
+                        dev.rikkahub.plugins.protocol.AttemptStatus.PREPARED
+                    } else {
+                        dev.rikkahub.plugins.protocol.AttemptStatus.CANCELLED
+                    },
                     attemptId = null,
                 ))))
-            } else current.withExecutionLedger(OperationLedger.cancel(ledger, id))
+            } else {
+                current.withExecutionLedger(OperationLedger.cancel(ledger, id))
+            }
         }
     }
 

@@ -21,22 +21,33 @@ class ChatServiceRecoveryTest {
         val id = Uuid.random()
         val user = me.rerere.ai.ui.UIMessage.user("request")
         val approvalId = Uuid.random().toString()
-        val tool = UIMessagePart.Tool("call", "effect", "{}",
-            approvalState = me.rerere.ai.ui.ToolApprovalState.Pending, approvalId = approvalId)
+        val tool = UIMessagePart.Tool(
+            "call",
+            "effect",
+            "{}",
+            approvalState = me.rerere.ai.ui.ToolApprovalState.Pending,
+            approvalId = approvalId
+        )
         val reply = me.rerere.ai.ui.UIMessage(role = me.rerere.ai.core.MessageRole.ASSISTANT, parts = listOf(tool))
         val ref = RunRef(id.toString(), user.id.toString(), "approval-run")
         val call = ToolCallStamp("call", "effect", "{}")
         val checkpoint = RunCheckpoint(
             RunState(ref, 5, 10, gates = mapOf(TOOL_APPROVAL_GATE to Gate(TOOL_APPROVAL_GATE, GateKind.TOOL_APPROVAL))),
-            "ToolPreflight", 0, messageId = reply.id.toString(), toolBatch = listOf(call),
+            "ToolPreflight",
+            0,
+            messageId = reply.id.toString(),
+            toolBatch = listOf(call),
             inputIds = listOf(user.id.toString(), reply.id.toString()),
             toolDefinitions = mapOf("effect" to "resource-a"),
-            approvalRequests = mapOf(approvalId to ToolApprovalRequestRecord(
-                approvalId, reply.id.toString(), call, "resource-a")),
+            approvalRequests = mapOf(
+                approvalId to ToolApprovalRequestRecord(approvalId, reply.id.toString(), call, "resource-a")
+            ),
         )
-        repo.insertConversation(Conversation.ofId(id).copy(title = "approval recovery")
-            .updateCurrentMessages(listOf(user, reply))
-            .withExecutionLedger(ExecutionLedger(runs = mapOf(ref.runId to checkpoint))))
+        repo.insertConversation(
+            Conversation.ofId(id).copy(title = "approval recovery")
+                .updateCurrentMessages(listOf(user, reply))
+                .withExecutionLedger(ExecutionLedger(runs = mapOf(ref.runId to checkpoint)))
+        )
         service.addConversationReference(id)
         try {
             service.stopGeneration(id)
@@ -45,11 +56,16 @@ class ChatServiceRecoveryTest {
             service.handleToolApproval(id, approvalId, approved = true)
             withTimeout(10000) { service.getGenerationJobStateFlow(id).first { it == null } }
             assertEquals(setOf(ref.runId), service.getConversation(id)!!.executionLedger().runs.keys)
-            assertEquals(RunStatus.CANCELLED,
-                service.getConversation(id)!!.executionLedger().runs.getValue(ref.runId).state.status)
+            assertEquals(
+                RunStatus.CANCELLED,
+                service.getConversation(id)!!.executionLedger().runs.getValue(ref.runId).state.status
+            )
             service.sendMessage(id, listOf(UIMessagePart.Text("ordinary after stop")), answer = false)
             withTimeout(10000) {
-                service.getConversationFlow(id).first { it.currentMessages.lastOrNull()?.toText() == "ordinary after stop" }
+                service.getConversationFlow(id).first {
+                    it.currentMessages.lastOrNull()?.toText() ==
+                        "ordinary after stop"
+                }
                 service.getGenerationJobStateFlow(id).first { it == null }
             }
             assertEquals("ordinary after stop", repo.getConversationById(id)!!.currentMessages.last().toText())
