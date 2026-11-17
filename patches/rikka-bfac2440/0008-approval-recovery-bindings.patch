@@ -1,4 +1,4 @@
-From d145a55fe0b093f0a9652b16dd89becf8d591800 Mon Sep 17 00:00:00 2001
+From 101069ee254fc55cfd32aa855467985b483ac92e Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 07:57:12 +0800
 Subject: [PATCH] Bind approval lifecycle and resource admission across session

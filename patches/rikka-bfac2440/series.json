@@ -4,7 +4,7 @@
     {
       "id": "optional-firebase",
       "file": "patches/rikka-bfac2440/0001-optional-firebase.patch",
-      "sha256": "433b9fbbdbfad51bdc565d4bcd45f24043a28a65747fb8ded5d853cdf6cc9643",
+      "sha256": "0c9dea09c3d983e3bba762163199782bd65ca06399632cab75a0697ae2e9e778",
       "paths": [
         "app/build.gradle.kts",
         "app/src/main/java/me/rerere/rikkahub/di/AppModule.kt",
@@ -15,7 +15,7 @@
     {
       "id": "plugin-build",
       "file": "patches/rikka-bfac2440/0002-plugin-build.patch",
-      "sha256": "1f89a9f0ff3a64ee09378f9d9810de4e3cf633e563780c749544d7b2bfa75586",
+      "sha256": "e708ded7b68cc0b839e2ba341d853422800a70a9d894557626cc51273fa299dc",
       "paths": [
         ".gitignore",
         "settings.gradle.kts"
@@ -24,7 +24,7 @@
     {
       "id": "agent-control",
       "file": "patches/rikka-bfac2440/0003-agent-control.patch",
-      "sha256": "e942eb2c0b367c63fe135fc4ad7f8cef31f5ac5a4c34694f19c9705f4688663c",
+      "sha256": "4b5b65ade7870975282f30524d7f7c3407d7ce4a1911ad6b5e6aed1ad4fb5480",
       "paths": [
         "ai/build.gradle.kts",
         "ai/src/main/java/me/rerere/ai/agent/Agent.kt",
@@ -36,7 +36,7 @@
     {
       "id": "conversation-storage",
       "file": "patches/rikka-bfac2440/0004-conversation-storage.patch",
-      "sha256": "2adae568dac3865d351f68fa3ea57d026d14f842abc7b26c2978c49994a9c8f1",
+      "sha256": "b7afdc2fde36efbbe7d0646d903805b0590dab0920ddcdb846984dbe96f1461c",
       "paths": [
         "app/build.gradle.kts",
         "app/schemas/me.rerere.rikkahub.data.db.AppDatabase/35.json",
@@ -50,7 +50,7 @@
     {
       "id": "agent-recovery-contract",
       "file": "patches/rikka-bfac2440/0005-agent-recovery-contract.patch",
-      "sha256": "5bc62a40217038116db3bc4f6ed229e05b43bc54a08bb8dbea9c7474c91b9871",
+      "sha256": "b8d5cb7c6a8981bcecaef81153b8a09b99234c1a6cbe8cbd4b33330f60f5e47a",
       "paths": [
         "ai/src/main/java/me/rerere/ai/agent/Agent.kt",
         "ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt",
@@ -60,7 +60,7 @@
     {
       "id": "registered-context-operations",
       "file": "patches/rikka-bfac2440/0006-registered-context-operations.patch",
-      "sha256": "ee96525e033a1c7f263f6352705ce7656f2f90beceb1052afe6c8d19227c2f6d",
+      "sha256": "1446b0ca60585e814a5ebd9be1d64a5cb22969f31a6aeaa80e8d21e360fdf300",
       "paths": [
         "ai/src/main/java/me/rerere/ai/agent/Agent.kt",
         "ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt",
@@ -79,7 +79,7 @@
     {
       "id": "confirmed-execution-recovery",
       "file": "patches/rikka-bfac2440/0007-confirmed-execution-recovery.patch",
-      "sha256": "b6a389e3a8725e6bcc76dc086a0ba026da888300c1eb7cca4b126fc343f8a086",
+      "sha256": "9d42cf6ebbbbcd2e196023379d65d8989ddba3acf650aa56494cd550a0e336da",
       "paths": [
         "ai/src/main/java/me/rerere/ai/agent/Agent.kt",
         "ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt",
@@ -104,7 +104,7 @@
     {
       "id": "approval-recovery-bindings",
       "file": "patches/rikka-bfac2440/0008-approval-recovery-bindings.patch",
-      "sha256": "7ddc48c2f9719b0a20ac462b77973298a67740d9e3ae11f6eb927859a08e8fb5",
+      "sha256": "f8235574e9841122b60b1ac4bed1e1b5129cb1d4944ba6c04b504a5c0ee4da6d",
       "paths": [
         "ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt",
         "ai/src/main/java/me/rerere/ai/core/Tool.kt",
@@ -133,7 +133,7 @@
     {
       "id": "atomic-approval-publication",
       "file": "patches/rikka-bfac2440/0009-atomic-approval-publication.patch",
-      "sha256": "db078f4d7976f15eac4981d0a496729f4dce5d6faee4badc9738eed5160af0ba",
+      "sha256": "d6103a62df8023b6d4f14cbf126bc28138fbed45d69f8d293b34a6ec98ba7034",
       "paths": [
         "ai/src/main/java/me/rerere/ai/agent/Agent.kt",
         "ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt",
@@ -148,11 +148,33 @@
     {
       "id": "persistent-history-ownership",
       "file": "patches/rikka-bfac2440/0010-persistent-history-ownership.patch",
-      "sha256": "9584f889d2811445363b2969111756e58a283185e97465cb71de65027870e703",
+      "sha256": "159aa0e156fbc741cc621fc6c9ab5407d7e9b368ccd8f22df886ded2af992890",
       "paths": [
         "app/src/main/java/me/rerere/rikkahub/service/ChatService.kt",
         "app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt",
         "app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt"
+      ]
+    },
+    {
+      "id": "packaged-plugin-ui",
+      "file": "patches/rikka-bfac2440/0011-packaged-plugin-ui.patch",
+      "sha256": "e07e94520ef722615ac1885de5ae5d9d2d10f6fe8b747974cb9eb2e354e4f133",
+      "paths": [
+        "ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt",
+        "ai/src/main/java/me/rerere/ai/core/Tool.kt",
+        "ai/src/main/java/me/rerere/ai/ui/UIMessagePart.kt",
+        "app/build.gradle.kts",
+        "app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt",
+        "app/src/main/java/me/rerere/rikkahub/RouteActivity.kt",
+        "app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt",
+        "app/src/main/java/me/rerere/rikkahub/di/AppModule.kt",
+        "app/src/main/java/me/rerere/rikkahub/service/ChatService.kt",
+        "app/src/main/java/me/rerere/rikkahub/ui/components/message/ChatMessageTools.kt",
+        "app/src/main/java/me/rerere/rikkahub/ui/components/message/tools/ToolUI.kt",
+        "app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt",
+        "app/src/main/java/me/rerere/rikkahub/ui/pages/extensions/ExtensionsPage.kt",
+        "web-ui/app/components/message/parts/tool-part.tsx",
+        "web-ui/app/types/parts.ts"
       ]
     }
   ]

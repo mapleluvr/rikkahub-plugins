@@ -1,0 +1,531 @@
+From 23d1ebc5a43b4b02818ce88abf09fe4967b69649 Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 14:10:17 +0800
+Subject: [PATCH] Integrate isolated packages, tool presentation and native
+ plugin UI
+
+Patch-Id: packaged-plugin-ui
+---
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt | 34 +++++------
+ ai/src/main/java/me/rerere/ai/core/Tool.kt    |  8 +++
+ .../java/me/rerere/ai/ui/UIMessagePart.kt     |  3 +
+ app/build.gradle.kts                          |  4 +-
+ .../java/me/rerere/rikkahub/RikkaHubApp.kt    |  2 +
+ .../java/me/rerere/rikkahub/RouteActivity.kt  | 19 +++++++
+ .../rikkahub/data/ai/ChatRequestFactory.kt    |  3 +-
+ .../java/me/rerere/rikkahub/di/AppModule.kt   |  6 ++
+ .../me/rerere/rikkahub/service/ChatService.kt | 56 +++++++++++++++++--
+ .../ui/components/message/ChatMessageTools.kt |  4 +-
+ .../ui/components/message/tools/ToolUI.kt     | 13 +++++
+ .../rerere/rikkahub/ui/pages/chat/ChatPage.kt |  4 ++
+ .../ui/pages/extensions/ExtensionsPage.kt     |  6 ++
+ .../components/message/parts/tool-part.tsx    |  5 +-
+ web-ui/app/types/parts.ts                     |  1 +
+ 15 files changed, 141 insertions(+), 27 deletions(-)
+
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index fe1cee44a2160ab66acfc7d922881b919c10c705..fd60289d5b5e11e15466ae36f127568f5f78de24 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -8,6 +8,7 @@ import kotlinx.datetime.toLocalDateTime
+ import kotlinx.serialization.json.buildJsonObject
+ import kotlinx.serialization.json.put
+ import me.rerere.ai.core.MessageRole
++import me.rerere.ai.core.ToolExecutionResult
+ import me.rerere.ai.core.sum
+ import me.rerere.ai.core.uniqueToolRegistrations
+ import me.rerere.ai.provider.TextGenerationParams
+@@ -175,14 +176,13 @@ internal class AgentLoop(
+     private suspend fun requestApprovals(current: UIMessage): Set<String> {
+         val updated = current.copy(
+             parts = current.parts.map { part ->
+-                if (part is UIMessagePart.Tool && !part.isExecuted &&
+-                    part.approvalState == ToolApprovalState.Auto &&
+-                    findTool(part.toolName)?.needsApproval?.invoke(part.inputAsJson()) == true
+-                ) {
+-                    part.copy(approvalState = ToolApprovalState.Pending)
+-                } else {
+-                    part
+-                }
++                if (part is UIMessagePart.Tool && !part.isExecuted) {
++                    val definition = findTool(part.toolName)
++                    val approval = if (part.approvalState == ToolApprovalState.Auto &&
++                        definition?.needsApproval?.invoke(part.inputAsJson()) == true
++                    ) ToolApprovalState.Pending else part.approvalState
++                    part.copy(approvalState = approval, details = part.details ?: definition?.presentation)
++                } else part
+             }
+         )
+         if (updated != current) update(updated, AgentBoundary.ToolPreflight)
+@@ -317,7 +317,8 @@ internal class AgentLoop(
+             }
+             val output = execute(tool)
+             updateTool(tool.toolCallId, starting = false) {
+-                it.copy(output = output, finishedAt = if (runs) Clock.System.now() else it.finishedAt)
++                it.copy(output = output.output, details = output.details,
++                    finishedAt = if (runs) Clock.System.now() else it.finishedAt)
+             }
+         }
+     }
+@@ -339,27 +340,28 @@ internal class AgentLoop(
+         )
+     }
+ 
+-    private suspend fun execute(tool: UIMessagePart.Tool): List<UIMessagePart> =
++    private suspend fun execute(tool: UIMessagePart.Tool): ToolExecutionResult =
+         when (val state = tool.approvalState) {
+-            is ToolApprovalState.Denied -> errorOutput(
++            is ToolApprovalState.Denied -> ToolExecutionResult(errorOutput(
+                 "Tool execution denied by user. Reason: ${state.reason.ifBlank { "No reason provided" }}"
+-            )
++            ))
+ 
+-            is ToolApprovalState.Answered -> listOf(UIMessagePart.Text(state.answer))
++            is ToolApprovalState.Answered -> ToolExecutionResult(listOf(UIMessagePart.Text(state.answer)))
+             ToolApprovalState.Auto, ToolApprovalState.Approved -> runTool(tool)
+             ToolApprovalState.Pending -> error("Tool ${tool.toolCallId} is still waiting for approval")
+         }
+ 
+-    private suspend fun runTool(tool: UIMessagePart.Tool): List<UIMessagePart> = try {
++    private suspend fun runTool(tool: UIMessagePart.Tool): ToolExecutionResult = try {
+         val definition = findTool(tool.toolName) ?: error("Tool ${tool.toolName} not found")
+         val args = runCatching { json.parseToJsonElement(tool.input.ifBlank { "{}" }) }
+             .getOrElse { error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}") }
+-        definition.execute(args).ifEmpty { listOf(UIMessagePart.Text(EMPTY_TOOL_OUTPUT)) }
++        val result = definition.executeDetailed?.invoke(args) ?: ToolExecutionResult(definition.execute(args))
++        result.copy(output = result.output.ifEmpty { listOf(UIMessagePart.Text(EMPTY_TOOL_OUTPUT)) })
+     } catch (e: CancellationException) {
+         // 取消必须向上传播，否则停止生成会被误报为工具执行错误
+         throw e
+     } catch (e: Throwable) {
+-        errorOutput("[${e.javaClass.name}] ${e.message}\n${e.stackTraceToString()}")
++        ToolExecutionResult(errorOutput("[${e.javaClass.name}] ${e.message}\n${e.stackTraceToString()}"))
+     }
+ 
+     private fun findTool(name: String) = registrations[name]
+diff --git a/ai/src/main/java/me/rerere/ai/core/Tool.kt b/ai/src/main/java/me/rerere/ai/core/Tool.kt
+index 1366d0f6dcee7e189bd42afeeb69fd603faa3a42..60c53e337d951ca0854ec5c2345c47b15a67577b 100644
+--- a/ai/src/main/java/me/rerere/ai/core/Tool.kt
++++ b/ai/src/main/java/me/rerere/ai/core/Tool.kt
+@@ -19,9 +19,16 @@ data class Tool(
+     val executionVersion: String = "host-v1",
+     /** Revalidate the captured resource and policy before consuming execution permission. */
+     val validateExecution: suspend () -> String? = { null },
++    /** Captured display identity, available during approval without running the handler. */
++    val presentation: JsonObject? = null,
++    /** Optional rich result, committed with model output by the same checkpoint. */
++    val executeDetailed: (suspend (JsonElement) -> ToolExecutionResult)? = null,
+     val execute: suspend (JsonElement) -> List<UIMessagePart>
+ )
+ 
++/** Details are local presentation data; provider serializers consume only output. */
++data class ToolExecutionResult(val output: List<UIMessagePart>, val details: JsonObject? = null)
++
+ /** Reject ambiguous public names before model preparation, approval, or effect lookup. */
+ fun List<Tool>.uniqueToolRegistrations(): Map<String, Tool> = buildMap {
+     for (tool in this@uniqueToolRegistrations) {
+@@ -39,5 +46,6 @@ sealed class InputSchema {
+     data class Obj(
+         val properties: JsonObject,
+         val required: List<String>? = null,
++        val additionalProperties: Boolean? = null,
+     ) : InputSchema()
+ }
+diff --git a/ai/src/main/java/me/rerere/ai/ui/UIMessagePart.kt b/ai/src/main/java/me/rerere/ai/ui/UIMessagePart.kt
+index 270bd1811576c2faaf23c20fc42f70f1b6deb5c0..0a23ffc6a8cdcc448603af809c0e6dcd5eb887b9 100644
+--- a/ai/src/main/java/me/rerere/ai/ui/UIMessagePart.kt
++++ b/ai/src/main/java/me/rerere/ai/ui/UIMessagePart.kt
+@@ -193,6 +193,8 @@ sealed class UIMessagePart {
+         val finishedAt: Instant? = null,
+         /** Local host approval request identity; never a provider tool-call ID. */
+         val approvalId: String? = null,
++        /** Local tool presentation, persisted with output and excluded from provider payloads. */
++        val details: JsonObject? = null,
+     ) : UIMessagePart() {
+         /** Whether the tool has been executed (has output) */
+         val isExecuted: Boolean get() = output.isNotEmpty()
+@@ -219,6 +221,7 @@ sealed class UIMessagePart {
+                 startedAt = startedAt,
+                 finishedAt = finishedAt,
+                 approvalId = approvalId,
++                details = details,
+             )
+         }
+     }
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index b72e9b8bc60c5313021b694b77a2f5aaa5872696..0042fe3972aaada1cdc95fdd3cfaa29a9bd9dc9d 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -119,9 +119,10 @@ android {
+     }
+     sourceSets {
+         getByName("main").kotlin.directories.add("../vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin")
++        getByName("main").res.srcDir("../vendor/rikka-plugin-host/adapters/rikka/app/src/main/res")
+         getByName("test").kotlin.directories.add("../vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin")
+         getByName("androidTest").kotlin.directories.add("../vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin")
+-        getByName("androidTest").assets.srcDirs("$projectDir/schemas")
++        getByName("androidTest").assets.srcDirs("$projectDir/schemas", "../vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/assets")
+     }
+     androidResources {
+         generateLocaleConfig = true
+@@ -202,6 +203,7 @@ configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configu
+ 
+ dependencies {
+     implementation(project(":plugin-core"))
++    implementation(project(":plugin-runtime-quickjs"))
+     implementation(libs.quickjs)
+     implementation(libs.androidx.core.ktx)
+     implementation(libs.androidx.lifecycle.runtime.ktx)
+diff --git a/app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt b/app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+index 5e7d7c6c7adcbf0819d632eeb8b98d5dd34cd3f8..36040282a970c883ff6a3c357bbf612bce2d52db 100644
+--- a/app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
++++ b/app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+@@ -62,6 +62,8 @@ const val MEMORY_DREAM_NOTIFICATION_CHANNEL_ID = "memory_dream"
+ class RikkaHubApp : Application() {
+     override fun onCreate() {
+         super.onCreate()
++        // Android also creates Application in isolated services, which do not own app storage or jobs.
++        if (android.os.Process.myUid() != applicationInfo.uid) return
+         // Restore files and settings before eager Koin singletons or workers can access them.
+         try {
+             val restored = runBlocking(Dispatchers.IO) {
+diff --git a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
+index d5cdd0859e03d7d0e1dc20e230dcbc3f3ee92201..625561aca28f89d7d08165288f9dd17f28cb5e17 100644
+--- a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
++++ b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
+@@ -546,6 +546,16 @@ class RouteActivity : ComponentActivity() {
+                                 LogPage()
+                             }
+ 
++                            entry<Screen.Plugins> { key ->
++                                me.rerere.rikkahub.plugins.ui.PluginManagementPage(key.conversationId)
++                            }
++
++                            entry<Screen.PluginPanel> { key ->
++                                me.rerere.rikkahub.plugins.ui.PluginPanelPage(
++                                    key.pluginId, key.hash, key.epoch, key.panelId, key.conversationId
++                                )
++                            }
++
+                             entry<Screen.Extensions> {
+                                 ExtensionsPage()
+                             }
+@@ -790,6 +800,15 @@ sealed interface Screen : NavKey {
+     @Serializable
+     data object Log : Screen
+ 
++    @Serializable
++    data class Plugins(val conversationId: String? = null) : Screen
++
++    @Serializable
++    data class PluginPanel(
++        val pluginId: String, val hash: String, val epoch: Long,
++        val panelId: String, val conversationId: String? = null,
++    ) : Screen
++
+     @Serializable
+     data object Extensions : Screen
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt
+index d8dc8d5792b52e5814473d5c4673e2145ba9cec5..c29f5777fde5ae304d74d81e455ffd7d831c6a2a 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/ChatRequestFactory.kt
+@@ -135,6 +135,7 @@ class ChatRequestFactory(
+         messages: List<UIMessage>,
+         processingStatus: MutableStateFlow<String?>,
+         takePendingParts: suspend () -> List<UIMessagePart> = { emptyList() },
++        extraTools: List<Tool> = emptyList(),
+     ): Pair<AgentRequest, AgentHooks> {
+         val request = AgentRequest(
+             provider = usageRecorder.wrap(
+@@ -143,7 +144,7 @@ class ChatRequestFactory(
+             ),
+             providerSetting = turn.providerSetting,
+             messages = messages,
+-            tools = turn.tools,
++            tools = turn.tools + extraTools,
+             stream = turn.assistant.streamOutput,
+             retry = turn.settings.retryPolicy(),
+         )
+diff --git a/app/src/main/java/me/rerere/rikkahub/di/AppModule.kt b/app/src/main/java/me/rerere/rikkahub/di/AppModule.kt
+index 5b3fb9fc92ba2cb2ed8b0fffd9b8e75c66b22317..87c0e72dc3d4cf48b70746c726c9725a7cd8320e 100644
+--- a/app/src/main/java/me/rerere/rikkahub/di/AppModule.kt
++++ b/app/src/main/java/me/rerere/rikkahub/di/AppModule.kt
+@@ -15,6 +15,7 @@ import me.rerere.rikkahub.service.BackgroundShellManager
+ import me.rerere.rikkahub.service.ChatFloatingTracker
+ import me.rerere.rikkahub.service.ChatNotificationManager
+ import me.rerere.rikkahub.service.ChatService
++import me.rerere.rikkahub.plugins.RikkaPluginManager
+ import me.rerere.rikkahub.service.MediaCreationService
+ import me.rerere.rikkahub.ui.floating.ChatFloatingWindows
+ import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceTerminalSessionManager
+@@ -137,6 +138,10 @@ val appModule = module {
+         )
+     }
+ 
++    single {
++        RikkaPluginManager(get(), get<AppScope>())
++    }
++
+     single {
+         ChatService(
+             context = get(),
+@@ -148,6 +153,7 @@ val appModule = module {
+             memoryConsolidationScheduler = get(),
+             translationHandler = get(),
+             metaGenerator = get(),
++            pluginManager = get(),
+             mcpManager = get(),
+             filesManager = get(),
+             folderRepository = get(),
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 4534d3c4a29e36fa1e0cf342696ccaf04e253cd6..614f857df25cfe4096b2234b512ca2a963953ecc 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -121,6 +121,7 @@ class ChatService(
+     private val filesManager: FilesManager,
+     private val folderRepository: FolderRepository,
+     private val backgroundShellManager: BackgroundShellManager,
++    private val pluginManager: RikkaPluginManager? = null,
+ ) {
+     private val builtinContext = BuiltinContextFeature { source, messages, prompt, beforeEffect ->
+         val turn = requestFactory.createContext(settingsStore.awaitLoaded(), source)
+@@ -130,6 +131,10 @@ class ChatService(
+         lease.pluginId !in settingsStore.settingsFlow.value.disabledPluginFeatures
+     }
+ 
++    private suspend fun dispatcherFor(call: OperationCall): SessionOperationDispatcher =
++        if (call.handler == builtinContext.operation.lease) operationDispatcher
++        else requireNotNull(pluginManager) { "Plugin host is unavailable" }.host().operationDispatcher()
++
+     /** 一次 agent 运行发给模型的消息，和回复要写进的节点 */
+     private class ReplyTarget(val history: List<UIMessage>, val nodeId: Uuid) {
+         /** 接着已有的助手消息写时是它的 id，新开回复时为空 */
+@@ -771,12 +776,29 @@ class ChatService(
+ 
+             var finishReason: AgentFinishReason? = null
+             var afterOperation = false
+-            val run = SessionAgentRun.open(session, initialTarget.history, initialTarget.nodeId) { boundary, ref ->
++            val pluginHost = try {
++                pluginManager?.host()
++            } catch (error: Exception) {
++                if (error is CancellationException) throw error
++                addError(error, conversationId)
++                if (!activeRun?.pluginLeases.isNullOrEmpty()) {
++                    session.inbox.pause()
++                    appEventBus.emit(AppEvent.ChatGenerationSegmentEnded(conversationId))
++                    return TurnResult.Waiting
++                }
++                null
++            }
++            val selectedPackages = activeRun?.pluginLeases ?: pluginHost?.preferredToolLeases().orEmpty()
++            val run = SessionAgentRun.open(session, initialTarget.history, initialTarget.nodeId,
++                pluginLeases = selectedPackages) { boundary, ref ->
+                 builtinContext.boundaryDecision(
+                     session, ref, boundary, settingsStore.settingsFlow.value, turn.model, canCompress, afterOperation
+                 )
+             }
+             try {
++                val pluginTools = pluginHost?.toolDefinitions(run.pluginLeases) {
++                    session.state.value.runInputMessages(run.ref.runId)
++                }.orEmpty()
+                 while (true) {
+                     val plan = run.resumePlan()
+                     val replyNodeId = plan.replyNodeId
+@@ -787,6 +809,7 @@ class ChatService(
+                         messages = plan.history,
+                         processingStatus = session.processingStatus,
+                         takePendingParts = session.inbox::takeNotices,
++                        extraTools = pluginTools,
+                     )
+                     finishReason = null
+                     withContext(Dispatchers.IO) {
+@@ -835,7 +858,7 @@ class ChatService(
+                     if (operation == null) break
+                     val outcome = executeBoundaryOperation(session, operation)
+                     afterOperation = outcome is OperationDispatch.Settled
+-                    if (!operationDispatcher.mayResumeAfter(operation, outcome)) break
++                    if (!dispatcherFor(operation).mayResumeAfter(operation, outcome)) break
+                     run.operationFinished()
+                 }
+             } catch (error: Throwable) {
+@@ -1062,6 +1085,25 @@ class ChatService(
+         onResult,
+     )
+ 
++    /** Accept a user action bound to the displayed frame. The application owns the accepted task. */
++    suspend fun submitPluginOperation(call: OperationCall) {
++        require(call.run == null && call.caller == null) { "UI actions cannot impersonate a run or plugin" }
++        val host = requireNotNull(pluginManager) { "Plugin host is unavailable" }.host()
++        val definition = requireNotNull(host.operationDefinitions().find { it.id == call.type && it.lease == call.handler })
++        check(host.authorized(call.handler, definition.capabilities)) { "Plugin action expired" }
++        withLoadedSession(Uuid.parse(call.target.conversationId)) { session ->
++            synchronized(session) {
++                check(session.getJob() == null) { "Conversation is busy" }
++                require(session.state.value.currentMessages.map { it.sourceStamp() } == call.frame) {
++                    "Displayed conversation changed; reopen the plugin action"
++                }
++                launchOperationJob(session, call) { result ->
++                    result.onFailure { addError(it, session.id, title = definition.title) }
++                }
++            }
++        }
++    }
++
+     private fun launchOperationJob(
+         session: ConversationSession,
+         call: OperationCall,
+@@ -1070,9 +1112,10 @@ class ChatService(
+         val delivered = AtomicBoolean(false)
+         val deliver = { result: Result<Unit> -> if (delivered.compareAndSet(false, true)) onResult(result) }
+         val job = launchGenerationJob(conversationId = session.id, activity = SessionActivity.Operation) {
+-            session.processingStatus.value = operationDispatcher.label(call)
++            val dispatcher = dispatcherFor(call)
++            session.processingStatus.value = dispatcher.label(call)
+             try {
+-                when (val outcome = operationDispatcher.dispatch(session, call)) {
++                when (val outcome = dispatcher.dispatch(session, call)) {
+                     is OperationDispatch.Settled -> deliver(Result.success(Unit))
+                     is OperationDispatch.Rejected -> deliver(Result.failure(outcome.error))
+                     OperationDispatch.Waiting -> deliver(Result.failure(MessageQueuePausedException()))
+@@ -1098,10 +1141,11 @@ class ChatService(
+     }
+ 
+     private suspend fun executeBoundaryOperation(session: ConversationSession, call: OperationCall): OperationDispatch {
++        val dispatcher = dispatcherFor(call)
+         session.setActivity(SessionActivity.Operation)
+-        session.processingStatus.value = operationDispatcher.label(call)
++        session.processingStatus.value = dispatcher.label(call)
+         return try {
+-            val outcome = operationDispatcher.dispatch(session, call)
++            val outcome = dispatcher.dispatch(session, call)
+             when (outcome) {
+                 is OperationDispatch.Settled, OperationDispatch.Waiting -> Unit
+                 is OperationDispatch.Rejected -> addError(outcome.error, session.id)
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/components/message/ChatMessageTools.kt b/app/src/main/java/me/rerere/rikkahub/ui/components/message/ChatMessageTools.kt
+index 8cccb9723a1ff205490d8b1940ed42d52ae1dc49..61beceab06fa6b45b880fb40944d96bef353ca4b 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/components/message/ChatMessageTools.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/components/message/ChatMessageTools.kt
+@@ -144,7 +144,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
+         return
+     }
+ 
+-    val renderer = remember(tool.toolName) { ToolUIRegistry.resolve(tool.toolName) }
++    val renderer = ToolUIRegistry.resolve(tool)
+     val outputJson = remember(tool) {
+         if (tool.isExecuted) {
+             runCatching {
+@@ -157,7 +157,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
+         }
+     }
+     // 输出不是 JSON (例如超长被截断后只剩文本预览) 时, 定制渲染器读不到任何字段, 详情改用默认渲染展示原文
+-    val outputUnparsable = tool.isExecuted && outputJson == null
++    val outputUnparsable = tool.isExecuted && outputJson == null && tool.details == null
+     val context = remember(tool, loading, assistant) {
+         ToolUIContext(
+             tool = tool,
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/components/message/tools/ToolUI.kt b/app/src/main/java/me/rerere/rikkahub/ui/components/message/tools/ToolUI.kt
+index 192dddda88bc389327e1117f42f3ca79fb25e954..7404882977ae52fa781ddcc6dc2ce4427fe67a61 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/components/message/tools/ToolUI.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/components/message/tools/ToolUI.kt
+@@ -114,6 +114,10 @@ object ToolUIRegistry {
+ 
+     /** 查找工具对应的渲染器, 未注册时返回默认渲染器 */
+     fun resolve(toolName: String): ToolUIRenderer = renderers[toolName] ?: DefaultToolUIRenderer
++
++    @Composable
++    fun resolve(tool: UIMessagePart.Tool): ToolUIRenderer =
++        me.rerere.rikkahub.plugins.ui.rememberPluginToolRenderer(tool) ?: resolve(tool.toolName)
+ }
+ 
+ internal fun JsonElement?.getStringContent(key: String): String? =
+@@ -159,6 +163,15 @@ fun DefaultToolPreview(
+                 style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
+             )
+         }
++        context.tool.details?.let { details ->
++            FormItem(label = { Text(stringResource(R.string.plugin_host_details)) }) {
++                HighlightCodeBlock(
++                    code = JsonInstantPretty.encodeToString(details),
++                    language = "json",
++                    style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
++                )
++            }
++        }
+         if (context.tool.output.isNotEmpty()) {
+             FormItem(
+                 label = {
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt
+index ad3eabfa6b8734241c7c1df2f1d1f074d34dafcb..379602c21b39213dc077cdb623b3127dd4c092c9 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatPage.kt
+@@ -650,6 +650,7 @@ private fun TopBar(
+ ) {
+     val scope = rememberCoroutineScope()
+     val toaster = LocalToaster.current
++    val pluginNavigator = LocalNavController.current
+     val titleState = useEditState<String> {
+         onUpdateTitle(it)
+     }
+@@ -722,6 +723,9 @@ private fun TopBar(
+                 ) {
+                     Icon(HugeIcons.MessageAdd01, "New Message")
+                 }
++                TextButton(onClick = {
++                    pluginNavigator.navigate(me.rerere.rikkahub.Screen.Plugins(conversation.id.toString()))
++                }) { Text(stringResource(R.string.plugin_host_title)) }
+                 ChatPageMenu(
+                     enabled = conversation.visibleMessageNodes.isNotEmpty(),
+                     onShowOverview = onShowOverview,
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/extensions/ExtensionsPage.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/extensions/ExtensionsPage.kt
+index 2cd8bcd761f9908127d76ef2c0e3cf2088850dc4..3dcc94c68310ceadf5721006058f331598091f54 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/extensions/ExtensionsPage.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/extensions/ExtensionsPage.kt
+@@ -69,6 +69,12 @@ fun ExtensionsPage() {
+                         headlineContent = { Text(stringResource(R.string.extensions_page_prompts)) },
+                         supportingContent = { Text(stringResource(R.string.extensions_page_prompts_desc)) },
+                     )
++                    item(
++                        onClick = { navController.navigate(Screen.Plugins()) },
++                        leadingContent = { CardGroupIcon(HugeIcons.Puzzle, containerColor = containerColor, contentColor = contentColor) },
++                        headlineContent = { Text(stringResource(R.string.plugin_host_title)) },
++                        supportingContent = { Text(stringResource(R.string.plugin_host_empty)) },
++                    )
+                     item(
+                         onClick = { navController.navigate(Screen.Skills) },
+                         leadingContent = { CardGroupIcon(HugeIcons.Puzzle, containerColor = containerColor, contentColor = contentColor) },
+diff --git a/web-ui/app/components/message/parts/tool-part.tsx b/web-ui/app/components/message/parts/tool-part.tsx
+index ac8e25373910c55be86270e64e413b68f5804331..5261e10c9aa57aaf9a99593d3d73c305d3564cbc 100644
+--- a/web-ui/app/components/message/parts/tool-part.tsx
++++ b/web-ui/app/components/message/parts/tool-part.tsx
+@@ -480,7 +480,9 @@ export function ToolPart({
+     [tool.output],
+   );
+ 
+-  const title = getToolTitle(tool.toolName, args, t);
++  const title = typeof tool.details?.title === "string"
++    ? tool.details.title
++    : getToolTitle(tool.toolName, args, t);
+   const isPending = tool.output.length === 0 && tool.approvalState.type === "pending";
+   const isDenied = tool.approvalState.type === "denied";
+   const deniedReason =
+@@ -663,6 +665,7 @@ export function ToolPart({
+                     })}
+                   </div>
+                 )}
++                {tool.details && <JsonBlock value={tool.details} />}
+                 {!isExecuted && (
+                   <div className="text-muted-foreground text-sm">{t("tool_part.not_executed")}</div>
+                 )}
+diff --git a/web-ui/app/types/parts.ts b/web-ui/app/types/parts.ts
+index a1ffed6a282d25c23e7c0b597bbe43698afbe013..2eb41f71d1cd3f6f925736af7baea5c13f46acee 100644
+--- a/web-ui/app/types/parts.ts
++++ b/web-ui/app/types/parts.ts
+@@ -55,6 +55,7 @@ export interface ToolPart extends BaseMessagePart {
+   output: UIMessagePart[];
+   approvalState: ToolApprovalState;
+   approvalId?: string | null;
++  details?: Record<string, unknown> | null;
+ }
+ 
+ export interface NoticePart extends BaseMessagePart {
