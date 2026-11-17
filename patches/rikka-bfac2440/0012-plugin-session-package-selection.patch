@@ -1,0 +1,55 @@
+From 4dde51ea7645752172fd785186486241f9c02ff7 Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 15:51:13 +0800
+Subject: [PATCH] Pin conversation plugin selection and provide idle update
+ adoption
+
+Patch-Id: plugin-session-package-selection
+---
+ .../me/rerere/rikkahub/service/ChatService.kt | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 614f857df25cfe4096b2234b512ca2a963953ecc..c2cc4a75d503ecc74432011ba3323e79d16bfbe9 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -788,7 +788,9 @@ class ChatService(
+                 }
+                 null
+             }
+-            val selectedPackages = activeRun?.pluginLeases ?: pluginHost?.preferredToolLeases().orEmpty()
++            val selectedPackages = activeRun?.pluginLeases ?: pluginHost?.let {
++                session.capturePackageSelection(it.state.value)
++            }.orEmpty()
+             val run = SessionAgentRun.open(session, initialTarget.history, initialTarget.nodeId,
+                 pluginLeases = selectedPackages) { boundary, ref ->
+                 builtinContext.boundaryDecision(
+@@ -1085,6 +1087,19 @@ class ChatService(
+         onResult,
+     )
+ 
++    /** Explicit idle-session adoption; a running or waiting generation retains its saved package snapshot. */
++    suspend fun adoptCurrentPlugins(conversationId: Uuid) {
++        val catalog = requireNotNull(pluginManager).host().state.value
++        withLoadedSession(conversationId) { session ->
++            session.commitExtension(session.incarnation) { current ->
++                check(!session.isGenerating && !current.hasUnfinishedPluginRun()) {
++                    "Finish or stop the current run before adopting plugin updates"
++                }
++                current.withPackageSelection(catalog.preferredSelection())
++            }
++        }
++    }
++
+     /** Accept a user action bound to the displayed frame. The application owns the accepted task. */
+     suspend fun submitPluginOperation(call: OperationCall) {
+         require(call.run == null && call.caller == null) { "UI actions cannot impersonate a run or plugin" }
+@@ -1092,6 +1107,8 @@ class ChatService(
+         val definition = requireNotNull(host.operationDefinitions().find { it.id == call.type && it.lease == call.handler })
+         check(host.authorized(call.handler, definition.capabilities)) { "Plugin action expired" }
+         withLoadedSession(Uuid.parse(call.target.conversationId)) { session ->
++            session.capturePackageSelection(host.state.value)
++            check(session.state.value.selectedPackage(call.handler)) { "Conversation plugin version changed" }
+             synchronized(session) {
+                 check(session.getJob() == null) { "Conversation is busy" }
+                 require(session.state.value.currentMessages.map { it.sourceStamp() } == call.frame) {

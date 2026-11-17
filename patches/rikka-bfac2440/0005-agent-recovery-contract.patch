@@ -1,4 +1,4 @@
-From 52fffdfeb0b843147ad4ca7ea7e4b1511d96fe15 Mon Sep 17 00:00:00 2001
+From 40873cc6bb1762aa6306f8015e6a711325789e6e Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 04:17:20 +0800
 Subject: [PATCH] Validate resume phases and retract failed request previews

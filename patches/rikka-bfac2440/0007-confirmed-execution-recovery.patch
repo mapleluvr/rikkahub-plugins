@@ -1,4 +1,4 @@
-From ce1f2ca90621d3488f2e30db9de29be28b2d625a Mon Sep 17 00:00:00 2001
+From d586d6390ff1d92cac0ccb6f0ec4a445b42194fd Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 06:33:38 +0800
 Subject: [PATCH] fix(host): serialize recovery, side-effect admission and
