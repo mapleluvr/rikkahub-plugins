@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import me.rerere.rikkahub.ui.components.ui.CardGroup
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -31,6 +30,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.plugins.PluginHostLoad
 import me.rerere.rikkahub.plugins.RikkaPluginManager
 import me.rerere.rikkahub.ui.components.nav.BackButton
+import me.rerere.rikkahub.ui.components.ui.CardGroup
 import org.koin.compose.koinInject
 
 @Composable

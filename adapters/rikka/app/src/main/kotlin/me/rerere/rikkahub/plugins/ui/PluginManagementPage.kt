@@ -6,18 +6,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import dev.rikkahub.plugins.core.PluginVersion
-import dev.rikkahub.plugins.core.updatePolicy
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import me.rerere.rikkahub.plugins.packageLeases
-import me.rerere.rikkahub.service.ChatService
-import org.koin.compose.koinInject
-import kotlin.uuid.Uuid
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +21,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.rikkahub.plugins.core.PluginArchive
+import dev.rikkahub.plugins.core.PluginVersion
+import dev.rikkahub.plugins.core.updatePolicy
 import dev.rikkahub.plugins.runtime.PluginHost
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -34,17 +30,65 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
+import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.plugins.SessionPackageStatus
+import me.rerere.rikkahub.plugins.packageAvailability
+import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.ui.context.LocalNavController
+import org.koin.compose.koinInject
+import kotlin.uuid.Uuid
 
 @Composable
 fun PluginManagementPage(conversationId: String? = null) {
     PluginPageFrame(stringResource(R.string.plugin_host_title)) {
-        PluginHostContent { host -> PluginManagement(host, conversationId) }
+        val service: ChatService = koinInject()
+        val conversation = if (conversationId != null) {
+            val id = remember(conversationId) { Uuid.parse(conversationId) }
+            DisposableEffect(id, service) {
+                service.addConversationReference(id)
+                onDispose { service.removeConversationReference(id) }
+            }
+            var loaded by remember(id) { mutableStateOf(false) }
+            LaunchedEffect(id, service) {
+                service.initializeConversation(id)
+                loaded = true
+            }
+            val current by service.getConversationFlow(id).collectAsStateWithLifecycle()
+            current.takeIf { loaded }
+        } else {
+            null
+        }
+        if (conversationId != null && conversation == null) {
+            Text(stringResource(R.string.plugin_host_loading))
+        } else {
+            if (conversation != null) {
+                var showHistory by remember(conversation.id) { mutableStateOf(false) }
+                OutlinedButton(onClick = { showHistory = !showHistory }) {
+                    Text(stringResource(R.string.plugin_host_history))
+                }
+                if (showHistory) PluginReceipts(conversation, null, service)
+                val scope = rememberCoroutineScope()
+                var error by remember { mutableStateOf<String?>(null) }
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        try {
+                            service.clearConversationPlugins(conversation.id)
+                        } catch (failure: Exception) {
+                            if (failure is CancellationException) throw failure
+                            error = failure.message
+                        }
+                    }
+                }) { Text(stringResource(R.string.plugin_host_clear_selection)) }
+                error?.let { Text(it) }
+            }
+            PluginHostContent { host -> PluginManagement(host, conversation) }
+        }
     }
 }
 
 @Composable
-private fun PluginManagement(host: PluginHost, conversationId: String?) {
+private fun PluginManagement(host: PluginHost, conversation: Conversation?) {
+    val conversationId = conversation?.id?.toString()
     val catalog by host.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val navigator = LocalNavController.current
@@ -54,16 +98,9 @@ private fun PluginManagement(host: PluginHost, conversationId: String?) {
     var busy by remember { mutableStateOf(false) }
     var repository by remember { mutableStateOf("") }
     val service: ChatService = koinInject()
-    val selection = if (conversationId != null) {
-        val id = remember(conversationId) { Uuid.parse(conversationId) }
-        DisposableEffect(id, service) {
-            service.addConversationReference(id)
-            onDispose { service.removeConversationReference(id) }
-        }
-        LaunchedEffect(id) { service.initializeConversation(id) }
-        val conversation by service.getConversationFlow(id).collectAsStateWithLifecycle()
-        conversation.packageLeases(catalog).associateBy { it.pluginId }
-    } else null
+    val availability = conversation?.packageAvailability(catalog)
+    val selection = availability?.filter { it.status == SessionPackageStatus.AVAILABLE }
+        ?.mapNotNull { it.lease }?.associateBy { it.pluginId }
     fun action(block: suspend () -> Unit) {
         scope.launch {
             busy = true
@@ -97,11 +134,23 @@ private fun PluginManagement(host: PluginHost, conversationId: String?) {
     }
     PluginGitHubInstaller(host, repository, !busy && candidate == null) { candidate = it }
     if (conversationId != null) {
-        OutlinedButton(onClick = { action { service.adoptCurrentPlugins(Uuid.parse(conversationId)) } }, enabled = !busy) {
+        OutlinedButton(onClick = {
+            action { service.adoptCurrentPlugins(Uuid.parse(conversationId)) }
+        }, enabled = !busy) {
             Text(stringResource(R.string.plugin_host_adopt))
         }
     }
     error?.let { Text(it) }
+    for (required in availability.orEmpty().filter { it.status != SessionPackageStatus.AVAILABLE }) {
+        PluginCard(required.pluginId) {
+            Text(required.hash)
+            Text(stringResource(if (required.status == SessionPackageStatus.MISSING) {
+                R.string.plugin_host_missing_package
+            } else {
+                R.string.plugin_host_package_not_authorized
+            }))
+        }
+    }
     if (catalog.packages.isEmpty()) Text(stringResource(R.string.plugin_host_empty))
     for ((id, versions) in catalog.packages.values.groupBy { it.manifest.id }.toSortedMap()) {
         val selected = (selection?.get(id)?.packageHash ?: catalog.preferred[id])?.let { catalog.packages[it] }
@@ -111,10 +160,14 @@ private fun PluginManagement(host: PluginHost, conversationId: String?) {
         PluginCard("${selected.manifest.name} · ${selected.manifest.version}") {
             Text(id)
             catalog.updatePolicies[id]?.repository?.let { source ->
-                OutlinedButton(onClick = { repository = source }) { Text(stringResource(R.string.plugin_host_check_updates)) }
+                OutlinedButton(onClick = {
+                    repository = source
+                }) { Text(stringResource(R.string.plugin_host_check_updates)) }
             }
             for (version in versions.filter { it.lease != selected.lease }) {
-                OutlinedButton(onClick = { action { candidate = host.prepareInstalled(version.lease.packageHash) } }, enabled = !busy) {
+                OutlinedButton(onClick = {
+                    action { candidate = host.prepareInstalled(version.lease.packageHash) }
+                }, enabled = !busy) {
                     Text(stringResource(R.string.plugin_host_use_version, version.manifest.version))
                 }
             }
@@ -129,7 +182,8 @@ private fun PluginManagement(host: PluginHost, conversationId: String?) {
                             displayedLease.packageHash,
                             displayedLease.activationEpoch,
                             panel.id,
-                            conversationId
+                            conversationId,
+                            displayedLease.issuerId
                         ))
                     }) { Text(panel.title) }
                 }
@@ -158,8 +212,10 @@ private fun PluginManagement(host: PluginHost, conversationId: String?) {
                 Column {
                     PermissionList(ready.pkg.manifest)
                     Text(ready.origin?.repository ?: stringResource(R.string.plugin_host_local))
-                    Text(ready.origin?.publisherKey?.let { stringResource(R.string.plugin_host_signature, it) }
-                        ?: stringResource(R.string.plugin_host_unsigned))
+                    Text(
+                        ready.origin?.publisherKey?.let { stringResource(R.string.plugin_host_signature, it) }
+                            ?: stringResource(R.string.plugin_host_unsigned)
+                    )
                     if (rollback) {
                         Text(stringResource(R.string.plugin_host_rollback))
                         Checkbox(checked = approveRollback, onCheckedChange = { approveRollback = it })
@@ -174,8 +230,12 @@ private fun PluginManagement(host: PluginHost, conversationId: String?) {
             confirmButton = {
                 TextButton(enabled = !busy && (!rollback || approveRollback) && (!sourceChanged || approveSource), onClick = {
                     action {
-                        host.activate(ready, ready.pkg.manifest.capabilities,
-                            allowRollback = approveRollback, allowSourceChange = approveSource)
+                        host.activate(
+                            ready,
+                            ready.pkg.manifest.capabilities,
+                            allowRollback = approveRollback,
+                            allowSourceChange = approveSource
+                        )
                         candidate = null
                     }
                 }) { Text(stringResource(R.string.plugin_host_approve)) }

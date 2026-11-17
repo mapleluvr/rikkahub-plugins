@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.plugins
 
 import dev.rikkahub.plugins.protocol.PackageLease
+import dev.rikkahub.plugins.protocol.RunStatus
 import dev.rikkahub.plugins.protocol.PluginCatalogState
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -25,7 +26,32 @@ fun Conversation.withPackageSelection(selection: SessionPackageSelection): Conve
     pluginState = JsonObject(pluginState + (PACKAGE_SELECTION to JsonInstant.encodeToJsonElement(selection)))
 )
 
-fun PluginCatalogState.preferredSelection(): SessionPackageSelection = SessionPackageSelection(packages = preferred.toMap())
+fun PluginCatalogState.preferredSelection(): SessionPackageSelection = SessionPackageSelection(
+    packages = preferred.toMap()
+)
+
+/** Read projection never grants execution permission or substitutes a preferred package. */
+enum class SessionPackageStatus { AVAILABLE, MISSING, DISABLED, REVOKED }
+
+data class SessionPackageView(val pluginId: String, val hash: String, val lease: PackageLease?, val status: SessionPackageStatus)
+
+fun Conversation.packageAvailability(catalog: PluginCatalogState): List<SessionPackageView> {
+    val active = executionLedger().runs.values.singleOrNull { it.state.status == RunStatus.ACTIVE }
+    val required = active?.pluginLeases?.associateBy { it.pluginId }
+    val selection = required?.mapValues { it.value.packageHash }
+        ?: (packageSelection() ?: catalog.preferredSelection()).packages
+    return selection.toSortedMap().map { (id, hash) ->
+        val installed = catalog.packages[hash]?.takeIf { it.manifest.id == id }
+        val pinned = required?.get(id)
+        val status = when {
+            installed == null -> SessionPackageStatus.MISSING
+            !installed.enabled -> SessionPackageStatus.DISABLED
+            pinned != null && installed.lease != pinned -> SessionPackageStatus.REVOKED
+            else -> SessionPackageStatus.AVAILABLE
+        }
+        SessionPackageView(id, hash, pinned ?: installed?.lease, status)
+    }
+}
 
 /** Disabling a plugin removes it from new runs. Re-enabling uses its new epoch; old run approvals keep their old lease. */
 fun SessionPackageSelection.resolve(

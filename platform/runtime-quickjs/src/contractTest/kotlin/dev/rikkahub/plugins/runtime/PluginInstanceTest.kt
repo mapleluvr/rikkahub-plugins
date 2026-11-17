@@ -166,16 +166,24 @@ class PluginInstanceTest {
     }
 
     @Test fun invalidToolArgumentsCannotReachJavascriptOrHostReads() = runBlocking {
-        val schema = Json.parseToJsonElement("""{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"],"additionalProperties":false}""") as kotlinx.serialization.json.JsonObject
-        val toolManifest = manifest.copy(operations = emptyList(), panels = emptyList(),
+        val schema = Json.parseToJsonElement(
+            """{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"],"additionalProperties":false}"""
+        ) as kotlinx.serialization.json.JsonObject
+        val toolManifest = manifest.copy(
+            operations = emptyList(),
+            panels = emptyList(),
             capabilities = setOf("context.read", "tools.register"),
-            tools = listOf(dev.rikkahub.plugins.protocol.PluginToolDeclaration("count", "Count", "Count messages", schema)))
-        val pkg = archive("""
+            tools = listOf(
+                dev.rikkahub.plugins.protocol.PluginToolDeclaration("count", "Count", "Count messages", schema)
+            )
+        )
+        val pkg =
+            archive("""
             globalThis.rikkaPlugin = rk => rk.registerTool('count', async (input, ctx) => {
               await ctx.readMessages();
               return {content: String(input.count)};
             });
-        """.trimIndent(), toolManifest)
+            """.trimIndent(), toolManifest)
         var reads = 0
         val instance = PluginInstance.prepare(pkg, PackageLease(manifest.id, pkg.hash, 1), { _, _ -> true }) {
             reads++

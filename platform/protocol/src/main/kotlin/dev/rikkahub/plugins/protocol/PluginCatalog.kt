@@ -20,4 +20,6 @@ data class PluginCatalogState(
     val packages: Map<String, InstalledPlugin> = emptyMap(),
     val preferred: Map<String, String> = emptyMap(),
     val updatePolicies: Map<String, PluginUpdatePolicy> = emptyMap(),
+    /** Persisted only with the authorization directory, not with conversation backups. */
+    val issuerId: String = "",
 )

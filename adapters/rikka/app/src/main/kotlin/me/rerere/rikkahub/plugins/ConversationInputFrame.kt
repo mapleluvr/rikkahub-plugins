@@ -63,7 +63,13 @@ fun Conversation.inheritPluginHistory(source: Conversation): Conversation {
     val safe = copy(messageNodes = messageNodes.filter { node ->
         node.currentMessage.id.toString().let { it !in sourceLineages || it in inherited }
     })
-    val history = if (inherited.isEmpty()) safe else safe.withExecutionLedger(ExecutionLedger(messageLineages = inherited))
+    val history = if (inherited.isEmpty()) {
+        safe
+    } else {
+        safe.withExecutionLedger(
+            ExecutionLedger(messageLineages = inherited)
+        )
+    }
     return source.packageSelection()?.let(history::withPackageSelection) ?: history
 }
 

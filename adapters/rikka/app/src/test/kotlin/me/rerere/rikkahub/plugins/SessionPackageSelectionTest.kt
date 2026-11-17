@@ -80,6 +80,39 @@ class SessionPackageSelectionTest {
         assertEquals(listOf(old.lease), fork.packageLeases(catalog(updated)))
     }
 
+    @Test fun missingRestoredPackageHasReadableIdentityWithoutSilentReplacement() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("restore")))
+            .withPackageSelection(catalog(old).preferredSelection())
+        val restored = catalog(updated).copy(packages = mapOf(updated.lease.packageHash to updated))
+        val view = initial.packageAvailability(restored).single()
+        assertEquals(pluginId, view.pluginId)
+        assertEquals(old.lease.packageHash, view.hash)
+        assertEquals(SessionPackageStatus.MISSING, view.status)
+        val session = open(initial, FakeConversationStore(initial))
+        assertTrue(runCatching { session.capturePackageSelection(restored) }.isFailure)
+        assertEquals(old.lease.packageHash, session.state.value.packageSelection()!!.packages[pluginId])
+        session.commitExtension { it.withPackageSelection(SessionPackageSelection()) }
+        assertTrue(session.capturePackageSelection(restored).isEmpty())
+    }
+
+    @Test fun missingActiveLeaseRemainsPinnedEvenAfterSamePackageIsReauthorized() = runBlocking {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("restore")))
+        val session = open(initial, FakeConversationStore(initial))
+        SessionAgentRun.open(session, initial.currentMessages, pluginLeases = listOf(old.lease)) { _, _ -> null }
+        assertEquals(
+            SessionPackageStatus.MISSING,
+            session.state.value.packageAvailability(PluginCatalogState()).single().status
+        )
+        val reauthorized = catalog(old).copy(packages = mapOf(
+            old.lease.packageHash to
+                old.copy(lease = old.lease.copy(activationEpoch = 10))
+        ))
+        val view = session.state.value.packageAvailability(reauthorized).single()
+        assertEquals(SessionPackageStatus.REVOKED, view.status)
+        assertEquals(old.lease, view.lease)
+        assertEquals(listOf(old.lease), session.state.value.packageLeases(reauthorized))
+    }
+
     private suspend fun CoroutineScope.open(initial: Conversation, store: FakeConversationStore) =
         ConversationSession(initial.id, initial, this, store, {}).also { it.initialize({ store.persisted }) }
 }

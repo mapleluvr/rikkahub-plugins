@@ -67,10 +67,19 @@ object PluginToolSchema {
 
     /** Called at execution admission as well as in the isolated runtime, before any host context read. */
     fun validate(schema: JsonObject, input: JsonElement) {
-        require(input.toString().length <= 256 * 1024) { "Tool input exceeds limit" }
+        // Budget the whole input, including additionalProperties, before recursive serialization.
         var count = 0
-        fun visit(node: JsonObject, value: JsonElement, depth: Int) {
+        fun budget(value: JsonElement, depth: Int) {
             require(++count <= 10000 && depth <= 16) { "Tool input exceeds structural limit" }
+            when (value) {
+                is JsonObject -> value.values.forEach { budget(it, depth + 1) }
+                is JsonArray -> value.forEach { budget(it, depth + 1) }
+                else -> Unit
+            }
+        }
+        budget(input, 0)
+        require(input.toString().length <= 256 * 1024) { "Tool input exceeds limit" }
+        fun visit(node: JsonObject, value: JsonElement, depth: Int) {
             val primitive = value as? JsonPrimitive
             val number = primitive?.takeIf { !it.isString }?.doubleOrNull
             val valid = when (node.getValue("type").jsonPrimitive.content) {

@@ -53,4 +53,8 @@
     <string name="plugin_host_rollback">允许此次回滚；保留历史最高版本记录。</string>
     <string name="plugin_host_source_change">确认更换此插件的仓库来源或签名身份。</string>
     <string name="plugin_host_adopt">在此会话采用当前插件版本</string>
+    <string name="plugin_host_history">查看历史操作与报告</string>
+    <string name="plugin_host_clear_selection">清除此会话的插件选择</string>
+    <string name="plugin_host_missing_package">本机缺少此包。可重新导入相同包并授权，或停止当前运行后采用当前版本、清除选择。</string>
+    <string name="plugin_host_package_not_authorized">此选择当前没有有效授权。旧运行权限不会随重新启用自动恢复；可停止运行后重新选择。</string>
 </resources>

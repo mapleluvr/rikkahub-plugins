@@ -92,8 +92,11 @@ class PluginUiWorkflowTest {
                 .jsonPrimitive.content.toInt())
             assertEquals(conversation.currentMessages.map { it.id }, confirmed.currentMessages.map { it.id })
             assertTrue(confirmed.executionLedger().runs.isEmpty())
-            service.editMessage(conversation.id, conversation.currentMessages.first().id,
-                listOf(me.rerere.ai.ui.UIMessagePart.Text("Edited after the panel was rendered")))
+            service.editMessage(
+                conversation.id,
+                conversation.currentMessages.first().id,
+                listOf(me.rerere.ai.ui.UIMessagePart.Text("Edited after the panel was rendered"))
+            )
             click("生成报告")
             awaitText("Displayed conversation changed; reopen the plugin action")
             assertEquals(1, repository.getConversationById(conversation.id)!!.executionLedger().operations.size)
@@ -118,6 +121,42 @@ class PluginUiWorkflowTest {
             compose.onNodeWithText("生成报告").assertDoesNotExist()
             compose.onNodeWithText(label(R.string.plugin_host_close)).assertDoesNotExist()
             assertEquals(1, repository.getConversationById(conversation.id)!!.executionLedger().operations.size)
+            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            awaitText(label(R.string.plugin_host_history))
+            click(label(R.string.plugin_host_history))
+            awaitText(label(R.string.plugin_host_settled))
+            click(label(R.string.plugin_host_receipt_details))
+            compose.onNodeWithText(receipt.call.id, substring = true).assertExists()
+            // A later package can remove every panel; host-owned history still has its own entry.
+            val manifest = host.state.value.packages.values.first {
+                it.manifest.id == pluginId
+            }.manifest.copy(
+                version = "1.99.0",
+                capabilities = setOf("artifacts.write"),
+                tools = emptyList(),
+                panels = emptyList()
+            )
+            val replacement = java.io.ByteArrayOutputStream().also { output ->
+                java.util.zip.ZipOutputStream(output).use { zip ->
+                    for ((name, text) in mapOf(
+                        "manifest.json" to kotlinx.serialization.json.Json.encodeToString(manifest),
+                        "main.js" to "globalThis.rikkaPlugin = rk => rk.registerOperation('review', () => ({artifacts:[]}));"
+                    )) {
+                        zip.putNextEntry(java.util.zip.ZipEntry(name))
+                        zip.write(text.toByteArray())
+                        zip.closeEntry()
+                    }
+                }
+            }.toByteArray()
+            host.activate(host.prepare(replacement), manifest.capabilities)
+            service.adoptCurrentPlugins(conversation.id)
+            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            awaitText(label(R.string.plugin_host_title))
+            compose.onNode(hasText(label(R.string.plugin_host_title)) and hasClickAction()).performClick()
+            awaitText(label(R.string.plugin_host_history))
+            click(label(R.string.plugin_host_history))
+            awaitText(label(R.string.plugin_host_settled))
+            compose.onNodeWithText("生成报告").assertDoesNotExist()
         } finally {
             scenario?.close()
             instrumentation.removeMonitor(picker)

@@ -53,4 +53,8 @@
     <string name="plugin_host_rollback">Allow this rollback; keep the highest recorded version.</string>
     <string name="plugin_host_source_change">Confirm changing this plugin’s repository or signing identity.</string>
     <string name="plugin_host_adopt">Use current plugin versions in this conversation</string>
+    <string name="plugin_host_history">View operation and report history</string>
+    <string name="plugin_host_clear_selection">Clear plugins for this conversation</string>
+    <string name="plugin_host_missing_package">This package is missing on this device. Import the same package and approve it, or stop the current run before adopting current versions or clearing the selection.</string>
+    <string name="plugin_host_package_not_authorized">This selection has no valid permission. Enabling it again does not restore an old run’s authority; stop that run before choosing again.</string>
 </resources>

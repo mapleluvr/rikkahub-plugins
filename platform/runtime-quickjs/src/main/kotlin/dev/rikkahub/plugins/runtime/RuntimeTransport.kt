@@ -2,7 +2,14 @@ package dev.rikkahub.plugins.runtime
 
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -14,24 +21,60 @@ internal object RuntimeTransport {
     const val CLOSE = 3
     const val LIMIT = 6 * 1024 * 1024
 
-    suspend fun outgoing(directory: File, bytes: ByteArray): ParcelFileDescriptor = withContext(Dispatchers.IO) {
-        require(bytes.size <= LIMIT)
-        val file = File.createTempFile("plugin-rpc-", ".tmp", directory)
-        try {
-            FileOutputStream(file).use { it.write(bytes) }
-            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-        } finally {
-            check(file.delete()) { "Could not unlink plugin transport" }
+    /** No descriptor crosses a cancellable dispatcher boundary without an owner. */
+    suspend fun withOutgoing(directory: File, bytes: ByteArray?, send: (ParcelFileDescriptor?) -> Unit) {
+        withContext(Dispatchers.IO) {
+            if (bytes == null) {
+                send(null)
+                return@withContext
+            }
+            require(bytes.size <= LIMIT)
+            val file = File.createTempFile("plugin-rpc-", ".tmp", directory)
+            try {
+                FileOutputStream(file).use { it.write(bytes) }
+                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+                    check(file.delete()) { "Could not unlink plugin transport" }
+                    currentCoroutineContext().ensureActive()
+                    send(descriptor)
+                }
+            } finally {
+                if (file.exists()) check(file.delete()) { "Could not unlink plugin transport" }
+            }
         }
     }
 
     /** The isolated service cannot create files in host storage; use a bounded pipe for replies. */
     fun responsePipe(): Array<ParcelFileDescriptor> = ParcelFileDescriptor.createPipe()
 
-    suspend fun incoming(descriptor: ParcelFileDescriptor): ByteArray = withContext(Dispatchers.IO) {
-        ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {
-            dev.rikkahub.plugins.core.PluginArchive.readBounded(it, LIMIT)
+    suspend fun incoming(descriptor: ParcelFileDescriptor): ByteArray = descriptor.use {
+        withContext(Dispatchers.IO) {
+            ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {
+                dev.rikkahub.plugins.core.PluginArchive.readBounded(it, LIMIT)
+            }
         }
+    }
+
+    /** A slow/unread pipe must remain cancellable so CLOSE can drain its writer. */
+    suspend fun writeResponse(descriptor: ParcelFileDescriptor, bytes: ByteArray) = descriptor.use {
+        require(bytes.size <= LIMIT)
+        val fd = descriptor.fileDescriptor
+        Os.fcntlInt(fd, OsConstants.F_SETFL, Os.fcntlInt(fd, OsConstants.F_GETFL, 0) or OsConstants.O_NONBLOCK)
+        var offset = 0
+        while (offset < bytes.size) {
+            currentCoroutineContext().ensureActive()
+            try {
+                offset += Os.write(fd, bytes, offset, minOf(16 * 1024, bytes.size - offset))
+            } catch (error: ErrnoException) {
+                if (error.errno != OsConstants.EAGAIN && error.errno != OsConstants.EINTR) throw error
+                delay(5)
+            }
+        }
+    }
+
+    fun replies(): Channel<Bundle> = Channel(capacity = 1, onUndeliveredElement = ::discard)
+
+    fun discard(bundle: Bundle) {
+        runCatching { descriptor(bundle).close() }
     }
 
     @Suppress("DEPRECATION")

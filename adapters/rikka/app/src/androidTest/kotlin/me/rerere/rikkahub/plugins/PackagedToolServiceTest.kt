@@ -110,8 +110,10 @@ class PackagedToolServiceTest {
             assertEquals(listOf(installed.lease), run.pluginLeases)
             val pending = waiting.currentMessages.last().getTools().single()
             assertTrue(pending.isPending)
-            assertEquals(installed.lease.packageHash,
-                pending.details!!.getValue("plugin").jsonObject.getValue("packageHash").jsonPrimitive.content)
+            assertEquals(
+                installed.lease.packageHash,
+                pending.details!!.getValue("plugin").jsonObject.getValue("packageHash").jsonPrimitive.content
+            )
             assertEquals("会话审阅", pending.details!!.getValue("title").jsonPrimitive.content)
             if (revoke) host.disable(id)
             val replacement = host.prepare(if (revoke) bytes else changedVersion(bytes))
@@ -150,8 +152,10 @@ class PackagedToolServiceTest {
                     withTimeout(20_000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
                     val awaiting = repository.getConversationById(initial.id)!!
                     val nextTool = awaiting.currentMessages.last().getTools().single()
-                    assertEquals(expected.lease.packageHash,
-                        nextTool.details!!.getValue("plugin").jsonObject.getValue("packageHash").jsonPrimitive.content)
+                    assertEquals(
+                        expected.lease.packageHash,
+                        nextTool.details!!.getValue("plugin").jsonObject.getValue("packageHash").jsonPrimitive.content
+                    )
                     assertTrue(runCatching { service.adoptCurrentPlugins(initial.id) }.isFailure)
                     service.handleToolApproval(initial.id, nextTool.approvalId!!, true)
                     withTimeout(20_000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
@@ -182,7 +186,9 @@ class PackagedToolServiceTest {
                 kotlinx.serialization.json.JsonObject(manifest + ("id" to
                     kotlinx.serialization.json.JsonPrimitive(manifest.getValue("id").jsonPrimitive.content + suffix)))
                     .toString().toByteArray()
-            } else original
+            } else {
+                original
+            }
         }
     }
 

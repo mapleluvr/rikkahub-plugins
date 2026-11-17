@@ -35,6 +35,31 @@ class AgentReviewRegressionTest {
     )
 
     @Test
+    fun toolIdentitySurvivesDenialAnswerArgumentFailureAndHandlerFailure() = runTest {
+        val identity = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"plugin":{"pluginId":"old","packageHash":"v1","activationEpoch":1},"title":"V1 title","toolId":"action"}"""
+        ) as kotlinx.serialization.json.JsonObject
+        val definition = Tool(name = "action", description = "new definition", execute = {
+            throw IllegalStateException("handler failed")
+        })
+        val tools = listOf(
+            UIMessagePart.Tool("denied", "action", "{}", approvalState = me.rerere.ai.ui.ToolApprovalState.Denied("no"), details = identity),
+            UIMessagePart.Tool("answered", "action", "{}", approvalState = me.rerere.ai.ui.ToolApprovalState.Answered("answer"), details = identity),
+            UIMessagePart.Tool("arguments", "action", "{", details = identity),
+            UIMessagePart.Tool("handler", "action", "{}", details = identity),
+        )
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = tools)
+        val result = runAgent(request(message).copy(tools = listOf(definition)), hooks)
+            .toList().last() as AgentEvent.Finished
+        for (saved in result.message.getTools()) {
+            assertTrue(saved.isExecuted)
+            val encoded = kotlinx.serialization.json.Json.encodeToString(UIMessagePart.Tool.serializer(), saved)
+            val reopened = kotlinx.serialization.json.Json.decodeFromString(UIMessagePart.Tool.serializer(), encoded)
+            assertEquals("Lost original identity for ${saved.toolCallId}", identity, reopened.details)
+        }
+    }
+
+    @Test
     fun mismatchedToolResumeRefusesBeforeAnyEffectOrModelCall() = runTest {
         var effects = 0
         val tools = listOf("A", "B").map { name ->

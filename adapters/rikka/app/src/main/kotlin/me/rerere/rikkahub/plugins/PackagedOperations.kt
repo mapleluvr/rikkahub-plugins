@@ -21,7 +21,10 @@ fun PluginHost.operationDefinitions(): List<ConversationOperation> = state.value
                     PluginContextMessage(it.id.toString(), it.role.name.lowercase(), it.toText())
                 }
                 PreparedConversationOperation(source.pluginSources(), validateAdoption = { current ->
-                    requireOperationAdmission(current.selectedPackage(installed.lease), "Conversation plugin version changed")
+                    requireOperationAdmission(
+                        current.selectedPackage(installed.lease),
+                        "Conversation plugin version changed"
+                    )
                 }, execute = { execution ->
                     execution.beforeEffect()
                     withInstance(installed.lease) { instance ->

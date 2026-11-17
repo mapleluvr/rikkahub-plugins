@@ -23,7 +23,9 @@ class PluginCatalogFile private constructor(
 
     fun read(): PluginCatalogState {
         check(ownership.isValid)
-        if (!Files.exists(target, NOFOLLOW_LINKS)) return PluginCatalogState()
+        if (!Files.exists(target, NOFOLLOW_LINKS)) {
+            return PluginCatalogState(issuerId = java.util.UUID.randomUUID().toString())
+        }
         require(Files.isRegularFile(target, NOFOLLOW_LINKS)) { "Catalog must be a regular file" }
         val bytes = Files.newInputStream(target, NOFOLLOW_LINKS).use { PluginArchive.readBounded(it, MAX_BYTES) }
         return PluginContract.json.decodeFromString(bytes.toString(Charsets.UTF_8))

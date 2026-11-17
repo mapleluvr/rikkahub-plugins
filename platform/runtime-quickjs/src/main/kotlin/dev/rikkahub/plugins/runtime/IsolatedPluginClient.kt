@@ -14,9 +14,11 @@ import dev.rikkahub.plugins.core.PluginArchive
 import dev.rikkahub.plugins.core.PluginContract
 import dev.rikkahub.plugins.core.VerifiedPluginPackage
 import dev.rikkahub.plugins.protocol.PackageLease
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -42,7 +44,7 @@ class IsolatedPluginClient private constructor(
 ) {
     private val handle = UUID.randomUUID().toString()
     private val connected = CompletableDeferred<Messenger>()
-    private val pending = ConcurrentHashMap<Int, CompletableDeferred<Bundle>>()
+    private val pending = ConcurrentHashMap<Int, Channel<Bundle>>()
     private val sequence = AtomicInteger()
     private val calls = Mutex()
     private val closing = Mutex()
@@ -56,9 +58,9 @@ class IsolatedPluginClient private constructor(
         private set
 
     private val replies = Messenger(Handler(Looper.getMainLooper()) { message ->
-        val waiting = pending.remove(message.arg1)
-        if (waiting == null || !waiting.complete(message.data)) {
-            runCatching { RuntimeTransport.descriptor(message.data).close() }
+        val waiting = pending[message.arg1]
+        if (waiting == null || waiting.trySend(message.data).isFailure) {
+            RuntimeTransport.discard(message.data)
         }
         true
     })
@@ -73,7 +75,7 @@ class IsolatedPluginClient private constructor(
             closed = true
             val error = IllegalStateException("Plugin runtime disconnected; uncertain work must be reconciled")
             connected.completeExceptionally(error)
-            pending.values.forEach { it.completeExceptionally(error) }
+            pending.values.forEach { it.cancel(CancellationException(error.message, error)) }
         }
     }
 
@@ -92,7 +94,9 @@ class IsolatedPluginClient private constructor(
         }
         require(id in ids)
         if (kind == "tool") {
-            dev.rikkahub.plugins.core.PluginToolSchema.validate(pkg.manifest.tools.single { it.id == id }.parameters, input)
+            dev.rikkahub.plugins.core.PluginToolSchema.validate(pkg.manifest.tools.single {
+                it.id == id
+            }.parameters, input)
         }
         try {
             val messages = if (kind != "panel" && "context.read" in pkg.manifest.capabilities) {
@@ -149,11 +153,10 @@ class IsolatedPluginClient private constructor(
     private suspend fun exchange(action: Int, bytes: ByteArray? = null): String = withTimeout(15_000) {
         val remote = connected.await()
         val id = sequence.incrementAndGet()
-        val response = CompletableDeferred<Bundle>()
+        val response = RuntimeTransport.replies()
         pending[id] = response
         try {
-            val file = bytes?.let { RuntimeTransport.outgoing(context.cacheDir, it) }
-            file.use { descriptor ->
+            RuntimeTransport.withOutgoing(context.cacheDir, bytes) { descriptor ->
                 remote.send(Message.obtain().apply {
                     what = action
                     arg1 = id
@@ -166,9 +169,13 @@ class IsolatedPluginClient private constructor(
                     }
                 })
             }
-            val bundle = response.await()
-            bundle.getString("error")?.let { error(it) }
-            RuntimeTransport.incoming(RuntimeTransport.descriptor(bundle)).toString(Charsets.UTF_8)
+            val bundle = response.receive()
+            try {
+                bundle.getString("error")?.let { error(it) }
+                RuntimeTransport.incoming(RuntimeTransport.descriptor(bundle)).toString(Charsets.UTF_8)
+            } finally {
+                RuntimeTransport.discard(bundle)
+            }
         } finally {
             pending.remove(id)
             response.cancel()

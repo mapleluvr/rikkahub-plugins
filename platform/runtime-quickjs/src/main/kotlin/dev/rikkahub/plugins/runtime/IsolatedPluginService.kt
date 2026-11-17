@@ -23,6 +23,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -40,6 +41,7 @@ class IsolatedPluginService : Service() {
     private val scope = CoroutineScope(owner + Dispatchers.IO)
     private val entries = ConcurrentHashMap<String, Entry>()
     private val pending = ConcurrentHashMap<String, Job>()
+    private val writers = ConcurrentHashMap<Job, String>()
     private val registration = Mutex()
     private class Entry(val instance: PluginInstance) {
         val lock = Mutex()
@@ -55,10 +57,11 @@ class IsolatedPluginService : Service() {
         if (handle == null || handle.length > 80 || response == null) {
             runCatching { RuntimeTransport.descriptor(payload).close() }
         } else if (action == RuntimeTransport.CLOSE) {
-            val work = pending[handle]
-            work?.cancel()
+            RuntimeTransport.discard(payload)
+            val work = (listOfNotNull(pending[handle]) + writers.filterValues { it == handle }.keys).distinct()
+            work.forEach { it.cancel() }
             scope.launch {
-                work?.join()
+                work.forEach { it.join() }
                 entries.remove(handle)?.instance?.close()
                 respond(response, request, Result.success("closed"))
             }
@@ -125,13 +128,26 @@ class IsolatedPluginService : Service() {
                         else -> error("Unknown runtime command")
                     }
                 }
-                withContext(NonCancellable) {
-                    if (result.isFailure) entries.remove(handle)?.instance?.close()
-                    pending.remove(handle)
+                val writer = currentCoroutineContext().job
+                try {
+                    withContext(NonCancellable) {
+                        if (result.isFailure) entries.remove(handle)?.instance?.close()
+                    }
+                    // Track the writer before releasing execution admission. CLOSE owns both phases.
+                    writers[writer] = handle
+                    pending.remove(handle, writer)
+                    currentCoroutineContext().ensureActive()
                     respond(response, request, result)
+                } finally {
+                    writers.remove(writer)
                 }
             }
             pending[handle] = work
+            work.invokeOnCompletion {
+                pending.remove(handle, work)
+                // Also covers cancellation before the lazy coroutine starts reading its payload.
+                RuntimeTransport.discard(payload)
+            }
             work.start()
         }
         true
@@ -149,8 +165,12 @@ class IsolatedPluginService : Service() {
                 }
             })
             pipe?.get(0)?.close()
-            if (pipe != null) ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { it.write(bytes!!) }
+            if (pipe != null) RuntimeTransport.writeResponse(pipe[1], bytes!!)
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
         } catch (_: Exception) {
+            // A vanished client has no recipient for an error reply.
+        } finally {
             pipe?.forEach { runCatching { it.close() } }
         }
     }
@@ -159,7 +179,7 @@ class IsolatedPluginService : Service() {
 
     override fun onDestroy() {
         scope.launch {
-            pending.values.toList().forEach { it.cancelAndJoin() }
+            (pending.values.toList() + writers.keys).distinct().forEach { it.cancelAndJoin() }
             entries.values.forEach { it.instance.close() }
             entries.clear()
             scope.cancel()

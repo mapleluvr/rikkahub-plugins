@@ -6,15 +6,17 @@ import dev.rikkahub.plugins.protocol.PluginCatalogState
 import dev.rikkahub.plugins.protocol.PluginReleaseOrigin
 import dev.rikkahub.plugins.protocol.PluginUpdatePolicy
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** P4 catalogs did not yet persist update policy. Both consent UI and activation use the same migration view. */
 fun PluginCatalogState.updatePolicy(pluginId: String): PluginUpdatePolicy? = updatePolicies[pluginId]
-    ?: packages.values.filter { it.manifest.id == pluginId }.maxByOrNull { PluginVersion.parse(it.manifest.version) }?.let {
+    ?: packages.values.filter {
+        it.manifest.id == pluginId
+    }.maxByOrNull { PluginVersion.parse(it.manifest.version) }?.let {
         PluginUpdatePolicy(it.manifest.version, it.origin?.repositoryId, it.origin?.repository, it.origin?.publisherKey)
     }
 
@@ -58,19 +60,24 @@ class PluginCatalog(initial: PluginCatalogState, private val persist: suspend (P
         require(allowRollback || high == null || nextVersion >= PluginVersion.parse(high)) {
             "Explicit rollback approval required"
         }
-        require(allowSourceChange || previousPolicy == null ||
-            previousPolicy.repositoryId == origin?.repositoryId && previousPolicy.publisherKey == origin?.publisherKey) {
+        require(
+            allowSourceChange || previousPolicy == null ||
+                previousPolicy.repositoryId == origin?.repositoryId &&
+                previousPolicy.publisherKey == origin?.publisherKey
+        ) {
             "Explicit source or publisher change approval required"
         }
         val policy = PluginUpdatePolicy(
             if (high != null && PluginVersion.parse(high) > nextVersion) high else pkg.manifest.version,
-            origin?.repositoryId, origin?.repository, origin?.publisherKey,
+            origin?.repositoryId,
+            origin?.repository,
+            origin?.publisherKey,
         )
         val existing = previous.packages[pkg.hash]
         val retainLease = existing?.enabled == true && existing.granted == granted
         val installed = InstalledPlugin(
             pkg.manifest,
-            if (retainLease) existing!!.lease else PackageLease(id, pkg.hash, previous.nextEpoch),
+            if (retainLease) existing!!.lease else PackageLease(id, pkg.hash, previous.nextEpoch, previous.issuerId),
             granted.toSet(),
             source = source,
             origin = origin,
@@ -115,7 +122,9 @@ class PluginCatalog(initial: PluginCatalogState, private val persist: suspend (P
 
     private fun validate(value: PluginCatalogState) {
         require(value.version == 1 && value.revision >= 0 && value.nextEpoch > 0)
+        require(value.issuerId.isEmpty() || Regex("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}").matches(value.issuerId))
         value.packages.forEach { (hash, record) ->
+            require(record.lease.issuerId == value.issuerId) { "Package lease belongs to another installation" }
             PluginArchive.requireHash(hash)
             require(hash == record.lease.packageHash && record.lease.pluginId == record.manifest.id)
             require(record.lease.activationEpoch in 1 until value.nextEpoch)
@@ -128,7 +137,10 @@ class PluginCatalog(initial: PluginCatalogState, private val persist: suspend (P
             require((policy.repositoryId == null) == (policy.repository == null))
             policy.repositoryId?.let { require(it > 0) }
             policy.repository?.let { require(GitHubPluginSource.parse(it).tag == null) }
-            policy.publisherKey?.let { PluginArchive.requireHash(it); require(policy.repositoryId != null) }
+            policy.publisherKey?.let {
+                PluginArchive.requireHash(it)
+                require(policy.repositoryId != null)
+            }
         }
         value.preferred.forEach { (id, hash) ->
             require(value.packages[hash]?.let { it.enabled && it.manifest.id == id } == true)

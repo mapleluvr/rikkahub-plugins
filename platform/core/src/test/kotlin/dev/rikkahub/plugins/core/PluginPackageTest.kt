@@ -99,6 +99,36 @@ class PluginPackageTest {
         rejected { PluginContract.result(manifest, """{"artifacts":[{"type":"report","content":"not granted"}]}""") }
     }
 
+    @Test fun additionalArgumentsCannotBypassDepthOrNodeBudgets() {
+        val schema = Json.parseToJsonElement("""{"type":"object"}""") as kotlinx.serialization.json.JsonObject
+        var deep: kotlinx.serialization.json.JsonElement = kotlinx.serialization.json.JsonPrimitive(1)
+        repeat(200) { deep = kotlinx.serialization.json.JsonObject(mapOf("extra" to deep)) }
+        rejected { PluginToolSchema.validate(schema, deep) }
+        val wide = kotlinx.serialization.json.JsonObject(mapOf(
+            "extra" to
+                kotlinx.serialization.json.JsonArray(List(10001) { kotlinx.serialization.json.JsonPrimitive(it) })
+        ))
+        rejected { PluginToolSchema.validate(schema, wide) }
+        PluginToolSchema.validate(schema, Json.parseToJsonElement("""{"extra":{"list":[1,true,null]}}"""))
+    }
+
+    @Test fun centralDirectoryMustAgreeWithLocalCrcLengthsAndDescriptor() {
+        val original = archive(manifest)
+        val data = java.nio.ByteBuffer.wrap(original).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        val central = data.getInt(original.size - 6)
+        for ((field, value) in listOf(
+            16 to 123,
+            20 to -1,
+            24 to -1,
+            20 to (data.getInt(central + 20) + 1),
+            24 to (data.getInt(central + 24) + 1)
+        )) {
+            val changed = original.copyOf()
+            java.nio.ByteBuffer.wrap(changed).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(central + field, value)
+            rejected { PluginArchive.decode(changed) }
+        }
+    }
+
     private fun archive(value: PluginManifest, extra: Map<String, ByteArray> = emptyMap()): ByteArray {
         val output = ByteArrayOutputStream()
         ZipOutputStream(output).use { zip ->

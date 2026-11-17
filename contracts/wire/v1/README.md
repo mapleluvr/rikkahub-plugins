@@ -24,15 +24,15 @@ manifest 包含必填 `id`、`name`、严格 SemVer `version`，以及 `capabili
 
 作者通过 `definePlugin(api => { ... })` 注册 `registerOperation`、`registerTool`、`registerPanel`。factory 登记函数，预检不可访问会话数据。宿主拥有序列化调用、权限检查、时间预算、取消及资源回收；Android 在 `isolatedProcess` Service 运行实际 JS。包没有 Node、文件系统或网络 API；可调用能力由宿主显式提供。
 
-`PackageLease(pluginId, packageHash, activationEpoch)` 由宿主签发和核验。新运行捕获选定包列表，空列表也被保存。更新可以保留旧 lease，进行中的运行和审批继续解析原包；停用撤销该插件所有版本，重新启用使用新的 epoch。
+`PackageLease(pluginId, packageHash, activationEpoch, issuerId)` 由宿主签发和核验。issuerId 是授权目录创建时签发的 UUID，随目录持久化，而非会话备份中的授权。新安装即使重新导入相同包、产生相同 epoch，也不接受旧安装的 run/审批 lease。旧目录缺少该字段时保留空 issuerId 兼容身份；新目录绝不签发空身份。新运行捕获选定包列表，空列表也被保存。更新可以保留旧 lease，进行中的运行和审批继续解析原包；停用撤销该插件所有版本，重新启用使用新的 epoch。
 
 操作和工具的 `Context.readMessages()` 返回授权快照中的 `{id, role, text}[]`。宿主在调用前后复核授权。面板渲染只能返回 UI 树。无效工具参数在 app adapter、隔离客户端和运行时三个入口校验，验证发生在宿主读取上下文之前。
 
 ## 输入与结果
 
-工具声明 `id/title/description/parameters/needsApproval`；默认需要审批。参数为结构化 JSON Schema 子集：根对象支持 `type/properties/required/additionalProperties`；子节点支持 object、array（必须指定 items）、string、number、integer、boolean、null，以及 description、enum。根 description 应放入工具声明；不支持的 schema 关键字直接拒绝。结构深度和节点数量受限，定义及实际参数分别验证。
+工具声明 `id/title/description/parameters/needsApproval`；默认需要审批。参数为结构化 JSON Schema 子集：根对象支持 `type/properties/required/additionalProperties`；子节点支持 object、array（必须指定 items）、string、number、integer、boolean、null，以及 description、enum。根 description 应放入工具声明；不支持的 schema 关键字直接拒绝。定义限制为深度 12、256 个 schema 节点；实际参数先对全部值（包括 additionalProperties 子树）检查深度 16、10000 个节点，再序列化检查字符预算和验证 schema。
 
-工具返回 `{content: string, details?: object}`。`content` 转为模型可见工具输出；`details` 与原包身份、工具 ID、标题一起进入消息确认事务。审批阶段已捕获显示身份。Android 与 Web 展开历史结果只读取保存字段；Provider 请求不包含 UI details。
+工具返回 `{content: string, details?: object}`。`content` 转为模型可见工具输出；`details` 与原包身份、工具 ID、标题一起进入消息确认事务。审批阶段已捕获显示身份。拒绝、人工回答、参数失败或 handler 异常没有返回新 details 时，结算保留原显示身份；插件的可选结果数据只能进入 data 区。Android 与 Web 展开历史结果只读取保存字段；Provider 请求不包含 UI details。
 
 操作返回 `{projection?: {omit: string[]}, artifacts?: {type: string, content: Json}[]}`。projection 需要 `context.write`，artifact 需要 `artifacts.write`。宿主只允许省略本次来源中的消息，在 Session 同库事务确认来源及结果；历史消息保留。报告操作可在空闲会话运行，无需创建模型 run。
 
@@ -42,4 +42,4 @@ manifest 包含必填 `id`、`name`、严格 SemVer `version`，以及 `capabili
 
 当前能力为 `context.read`、`context.write`、`artifacts.write`、`tools.register`、`ui.actions`、`ui.overlay.app`。包预检成功后才请求授权。激活目录原子替换确认后发布注册表；冷启动验证全部保留包与目录，损坏状态阻止激活。停用先撤权，再取消并等待宿主读取和 JS 实例清理。
 
-操作记录 PREPARED、RUNNING、SETTLED、CANCELLED、UNKNOWN；进程恢复将未确认 RUNNING 转为 UNKNOWN，保存 attempt 身份供核对。操作与报告区域属于宿主，插件停用后仍可读取历史记录。源内容变更显示提示；旧动作重新提交仍需通过来源验证。UNKNOWN 不自动执行或伪装成完成，Stop 保留已有执行证据。
+操作记录 PREPARED、RUNNING、SETTLED、CANCELLED、UNKNOWN；进程恢复将未确认 RUNNING 转为 UNKNOWN，保存 attempt 身份供核对。操作与报告区域属于宿主，可从会话插件管理页直接进入；插件停用、授权失效或新版移除面板后仍可读取历史记录，不加载 JS。恢复数据库但缺少原包时，页面显示所需包哈希，允许重新导入后明确授权，或在无活动 run 时采用当前版本/清除选择。活动 run 保留原 lease 并等待，Stop 后才能修改选择。源内容变更显示提示；旧动作重新提交仍需通过来源验证。UNKNOWN 不自动执行或伪装成完成，Stop 保留已有执行证据。

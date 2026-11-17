@@ -4,20 +4,20 @@ import android.content.Context
 import dev.rikkahub.plugins.core.PluginCatalog
 import dev.rikkahub.plugins.core.PluginCatalogFile
 import dev.rikkahub.plugins.core.PluginPackageStore
+import dev.rikkahub.plugins.core.PluginReleaseCandidate
+import dev.rikkahub.plugins.core.PluginReleaseContract
 import dev.rikkahub.plugins.core.VerifiedPluginPackage
 import dev.rikkahub.plugins.protocol.InstalledPlugin
 import dev.rikkahub.plugins.protocol.PackageLease
 import dev.rikkahub.plugins.protocol.PluginCatalogState
 import dev.rikkahub.plugins.protocol.PluginReleaseOrigin
-import dev.rikkahub.plugins.core.PluginReleaseCandidate
-import dev.rikkahub.plugins.core.PluginReleaseContract
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -84,7 +84,15 @@ class PluginHost private constructor(
         allowSourceChange: Boolean = false,
     ): InstalledPlugin = lifecycle.withLock {
         check(!closed && candidate.owner === this) { "Candidate belongs to an expired host" }
-        catalog.activate(candidate.pkg, granted, candidate.revision, source, candidate.origin, allowRollback, allowSourceChange)
+        catalog.activate(
+            candidate.pkg,
+            granted,
+            candidate.revision,
+            source,
+            candidate.origin,
+            allowRollback,
+            allowSourceChange
+        )
     }
 
     /** Commit revocation first. All retained versions become unauthorized before engine shutdown begins. */

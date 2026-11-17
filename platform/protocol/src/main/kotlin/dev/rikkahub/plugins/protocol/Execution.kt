@@ -11,7 +11,11 @@ data class RunRef(val conversationId: String, val branchId: String, val runId: S
 data class BranchRef(val conversationId: String, val branchId: String)
 
 @Serializable
-data class PackageLease(val pluginId: String, val packageHash: String, val activationEpoch: Long)
+data class PackageLease(
+    val pluginId: String, val packageHash: String, val activationEpoch: Long,
+    /** Independent installation identity; empty only for pre-namespace catalogs. */
+    val issuerId: String = "",
+)
 
 @Serializable
 enum class GateKind { USER_PAUSE, TOOL_APPROVAL, PLUGIN_INPUT, OPERATION_DEPENDENCY, PLUGIN_FAULT }

@@ -7,8 +7,8 @@ import dev.rikkahub.plugins.protocol.PluginOperationDeclaration
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -70,6 +70,32 @@ class PluginHostTest {
         } finally {
             host.close()
             root.deleteRecursively()
+        }
+    }
+
+    @Test fun freshInstallationCannotAuthorizeRestoredLeaseForIdenticalPackage() = runBlocking {
+        val firstRoot = Files.createTempDirectory(context.cacheDir.toPath(), "host-first-").toFile()
+        val secondRoot = Files.createTempDirectory(context.cacheDir.toPath(), "host-fresh-").toFile()
+        val first = PluginHost.open(context, firstRoot)
+        val second = PluginHost.open(context, secondRoot)
+        try {
+            val bytes = archive("1.0.0")
+            val old = first.activate(first.prepare(bytes), grants)
+            val restored = second.activate(second.prepare(bytes), grants)
+            assertEquals(old.lease.packageHash, restored.lease.packageHash)
+            assertEquals(old.lease.activationEpoch, restored.lease.activationEpoch)
+            assertFalse("Fresh consent must not revive an imported run/approval lease", second.authorized(old.lease, grants))
+            second.close()
+            val reopened = PluginHost.open(context, secondRoot)
+            try {
+                assertTrue(reopened.authorized(restored.lease, grants))
+                assertFalse(reopened.authorized(old.lease, grants))
+            } finally { reopened.close() }
+        } finally {
+            first.close()
+            second.close()
+            firstRoot.deleteRecursively()
+            secondRoot.deleteRecursively()
         }
     }
 

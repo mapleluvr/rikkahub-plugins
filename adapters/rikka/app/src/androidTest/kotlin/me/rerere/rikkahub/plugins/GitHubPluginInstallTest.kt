@@ -1,8 +1,5 @@
 package me.rerere.rikkahub.releasefixture
 
-import me.rerere.rikkahub.plugins.GitHubPluginHttp
-import me.rerere.rikkahub.plugins.PluginGitHubCredentials
-
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.rikkahub.plugins.core.GitHubPluginResolver
 import dev.rikkahub.plugins.core.GitHubPluginSource
@@ -11,6 +8,8 @@ import dev.rikkahub.plugins.runtime.PluginHost
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
+import me.rerere.rikkahub.plugins.GitHubPluginHttp
+import me.rerere.rikkahub.plugins.PluginGitHubCredentials
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

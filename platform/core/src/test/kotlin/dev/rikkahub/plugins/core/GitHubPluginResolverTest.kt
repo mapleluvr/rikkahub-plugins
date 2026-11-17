@@ -61,8 +61,10 @@ class GitHubPluginResolverTest {
         val signature = """{"algorithm":"ES256","publicKey":"AQ==","signature":"AQ=="}""".toByteArray()
         fixture.responses["repos/owner/repo/releases/assets/13"] = signature
         val assets = (newest.getValue("assets") as JsonArray) + JsonObject(mapOf(
-            "id" to JsonPrimitive(13), "name" to JsonPrimitive("release.json.sig"),
-            "size" to JsonPrimitive(signature.size)))
+            "id" to JsonPrimitive(13),
+            "name" to JsonPrimitive("release.json.sig"),
+            "size" to JsonPrimitive(signature.size)
+        ))
         fixture.page(1, listOf(JsonObject(newest + ("assets" to JsonArray(assets))), fixture.release(2, "1.0.0")))
         val found = GitHubPluginResolver(fixture).discover(GitHubPluginSource.parse("owner/repo"))
         assertEquals("1.0.0", found.candidates.single().entry.version)

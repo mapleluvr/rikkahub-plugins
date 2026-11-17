@@ -32,7 +32,7 @@ object PluginArchive {
         val hash = hash(bytes)
         require(expectedHash == null || hash == expectedHash) { "Plugin hash mismatch" }
         try {
-            val names = centralNames(bytes)
+            val directory = centralDirectory(bytes)
             val files = linkedMapOf<String, ByteArray>()
             ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
                 var total = 0
@@ -42,14 +42,19 @@ object PluginArchive {
                         "Only declared regular files are supported"
                     }
                     PluginContract.path(entry.name)
-                    require(entry.name in names && entry.name !in files) { "Ambiguous ZIP entry" }
+                    val expected = requireNotNull(directory[entry.name]) { "ZIP entry absent from directory" }
+                    require(entry.name !in files) { "Ambiguous ZIP entry" }
                     val content = readBounded(zip, MAX_EXPANDED_BYTES - total)
+                    zip.closeEntry()
+                    require(entry.crc == expected.crc && entry.compressedSize == expected.compressed &&
+                        entry.size == expected.expanded && content.size.toLong() == expected.expanded) {
+                        "ZIP directory disagrees with actual entry"
+                    }
                     total += content.size
                     files[entry.name] = content
-                    zip.closeEntry()
                 }
             }
-            require(names == files.keys) { "ZIP directory disagrees with file contents" }
+            require(directory.keys == files.keys) { "ZIP directory disagrees with file contents" }
             val manifest = PluginContract.manifest(utf8(requireNotNull(files["manifest.json"]) { "Missing manifest" }))
             val declared = setOf("manifest.json", manifest.entry) + manifest.resources
             require(files.keys == declared) { "Package resources do not match manifest" }
@@ -85,10 +90,24 @@ object PluginArchive {
         .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
         .decode(ByteBuffer.wrap(bytes)).toString()
 
-    /** ZIP64, split archives, links, encryption, directory entries and ambiguous spellings are rejected. */
-    private fun centralNames(bytes: ByteArray): Set<String> {
+    private data class ZipRecord(val crc: Long, val compressed: Long, val expanded: Long)
+
+    /** ZIP64, split archives, links, encryption and ambiguous or overlapping records are rejected. */
+    private fun centralDirectory(bytes: ByteArray): Map<String, ZipRecord> {
         val data = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         fun short(at: Int): Int = data.getShort(at).toInt() and 0xffff
+        fun uint(at: Int): Long = data.getInt(at).toLong() and 0xffffffffL
+        fun record(at: Int) = ZipRecord(uint(at), uint(at + 4), uint(at + 8))
+        fun extra(at: Int, length: Int) {
+            var cursor = at
+            val end = at + length
+            while (cursor < end) {
+                require(cursor + 4 <= end) { "Truncated ZIP extra field" }
+                require(short(cursor) != 1) { "ZIP64 is unsupported" }
+                cursor += 4 + short(cursor + 2)
+                require(cursor <= end) { "Truncated ZIP extra data" }
+            }
+        }
         val end = bytes.size - 22
         require(data.getInt(end) == 0x06054b50 && short(end + 20) == 0) { "ZIP must have an unambiguous end record" }
         require(short(end + 4) == 0 && short(end + 6) == 0 && short(end + 8) == short(end + 10))
@@ -97,31 +116,67 @@ object PluginArchive {
         val start = data.getInt(end + 16)
         val length = data.getInt(end + 12)
         require(start >= 0 && length >= 0 && start.toLong() + length == end.toLong())
-        val names = linkedSetOf<String>()
+        val records = linkedMapOf<String, ZipRecord>()
         val folded = hashSetOf<String>()
+        val ranges = mutableListOf<Pair<Int, Int>>()
         var offset = start
         repeat(count) {
             require(offset + 46 <= end && data.getInt(offset) == 0x02014b50)
             val flags = short(offset + 8)
             val method = short(offset + 10)
-            require(flags and 1 == 0 && method in setOf(0, 8)) { "Unsupported ZIP encoding" }
+            require(flags and 0x0808.inv() == 0 && method in setOf(0, 8)) { "Unsupported ZIP encoding" }
             require(short(offset + 34) == 0)
             val mode = data.getInt(offset + 38) ushr 16
             require(mode and 0xf000 in setOf(0, 0x8000)) { "ZIP special files are unsupported" }
             val nameSize = short(offset + 28)
-            val next = offset + 46 + nameSize + short(offset + 30) + short(offset + 32)
+            val extraSize = short(offset + 30)
+            val next = offset + 46 + nameSize + extraSize + short(offset + 32)
             require(next <= end)
+            extra(offset + 46 + nameSize, extraSize)
             val name = utf8(bytes.copyOfRange(offset + 46, offset + 46 + nameSize))
             PluginContract.path(name)
-            require(names.add(name) && folded.add(name.lowercase(Locale.ROOT))) { "Duplicate ZIP path" }
+            val expected = record(offset + 16)
+            require(expected.compressed <= MAX_ARCHIVE_BYTES && expected.expanded <= MAX_EXPANDED_BYTES) {
+                "Invalid ZIP lengths or ZIP64 sentinel"
+            }
+            require(records.put(name, expected) == null && folded.add(name.lowercase(Locale.ROOT))) {
+                "Duplicate ZIP path"
+            }
             val local = data.getInt(offset + 42)
             require(local >= 0 && local.toLong() + 30 <= start && data.getInt(local) == 0x04034b50)
             require(short(local + 6) == flags && short(local + 8) == method && short(local + 26) == nameSize)
-            require(local.toLong() + 30 + nameSize + short(local + 28) <= start)
+            val localExtra = short(local + 28)
+            val contentStart = local.toLong() + 30 + nameSize + localExtra
+            val contentEnd = contentStart + expected.compressed
+            require(contentEnd <= start) { "ZIP entry exceeds data boundary" }
             require(bytes.copyOfRange(local + 30, local + 30 + nameSize).contentEquals(name.toByteArray()))
+            extra(local + 30 + nameSize, localExtra)
+            val header = record(local + 14)
+            var recordEnd = contentEnd.toInt()
+            if (flags and 8 != 0) {
+                require(method == 8 && (header == ZipRecord(0, 0, 0) || header == expected)) {
+                    "ZIP local header disagrees with directory"
+                }
+                require(recordEnd.toLong() + 12 <= start)
+                if (data.getInt(recordEnd) == 0x08074b50) recordEnd += 4
+                require(recordEnd.toLong() + 12 <= start && record(recordEnd) == expected) {
+                    "ZIP descriptor disagrees with directory"
+                }
+                recordEnd += 12
+            } else {
+                require(header == expected) { "ZIP local header disagrees with directory" }
+            }
+            ranges += local to recordEnd
             offset = next
         }
         require(offset == end)
-        return names
+        // Every local byte belongs to exactly one declared entry, regardless of central-directory order.
+        var boundary = 0
+        for ((begin, finish) in ranges.sortedBy { it.first }) {
+            require(begin == boundary) { "ZIP data has gaps or overlapping entries" }
+            boundary = finish
+        }
+        require(boundary == start) { "ZIP has undeclared data" }
+        return records
     }
 }

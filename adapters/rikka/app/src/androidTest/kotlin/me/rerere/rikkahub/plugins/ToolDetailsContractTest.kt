@@ -1,11 +1,5 @@
 package me.rerere.rikkahub.plugins
 
-import me.rerere.ai.agent.AgentEvent
-import me.rerere.ai.agent.AgentHooks
-import me.rerere.ai.agent.AgentRequest
-import me.rerere.ai.agent.StepRequest
-import me.rerere.ai.agent.runAgent
-
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -14,6 +8,11 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.agent.AgentEvent
+import me.rerere.ai.agent.AgentHooks
+import me.rerere.ai.agent.AgentRequest
+import me.rerere.ai.agent.StepRequest
+import me.rerere.ai.agent.runAgent
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolExecutionResult

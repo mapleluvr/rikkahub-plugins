@@ -69,7 +69,8 @@ class PluginInstance private constructor(
         require(id in allowed) { "Undeclared contribution" }
         if (kind == "tool") {
             dev.rikkahub.plugins.core.PluginToolSchema.validate(
-                pkg.manifest.tools.single { it.id == id }.parameters, input
+                pkg.manifest.tools.single { it.id == id }.parameters,
+                input
             )
         }
         phase = if (kind == "panel") Phase.RENDERING else Phase.EXECUTING

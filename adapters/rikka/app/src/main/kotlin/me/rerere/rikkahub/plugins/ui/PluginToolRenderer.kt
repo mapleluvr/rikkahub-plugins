@@ -29,8 +29,10 @@ fun rememberPluginToolRenderer(tool: UIMessagePart.Tool): ToolUIRenderer? {
     if (!tool.toolName.startsWith("p_")) return null
     val saved = tool.details
     val savedTitle = (saved?.get("title") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-    if (savedTitle != null) return remember(tool.toolName, saved) {
-        PluginToolRenderer(tool.toolName, savedTitle, saved)
+    if (savedTitle != null) {
+        return remember(tool.toolName, saved) {
+            PluginToolRenderer(tool.toolName, savedTitle, saved)
+        }
     }
     val manager: RikkaPluginManager = koinInject()
     val state by manager.state.collectAsStateWithLifecycle()

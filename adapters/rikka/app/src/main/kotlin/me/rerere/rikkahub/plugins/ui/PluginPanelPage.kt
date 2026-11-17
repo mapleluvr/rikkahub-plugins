@@ -33,22 +33,24 @@ import kotlinx.serialization.json.JsonNull
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.plugins.executionLedger
-import me.rerere.rikkahub.plugins.selectedPackage
 import me.rerere.rikkahub.plugins.operationCall
 import me.rerere.rikkahub.plugins.operationDefinitions
+import me.rerere.rikkahub.plugins.selectedPackage
 import me.rerere.rikkahub.plugins.sourceStamp
 import me.rerere.rikkahub.service.ChatService
-import me.rerere.rikkahub.ui.components.ui.FloatingWindow
 import me.rerere.rikkahub.ui.components.richtext.MaterialMarkdown
+import me.rerere.rikkahub.ui.components.ui.FloatingWindow
 import me.rerere.rikkahub.utils.JsonInstantPretty
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
 
 @Composable
-fun PluginPanelPage(pluginId: String, hash: String, epoch: Long, panelId: String, conversationId: String?) {
+fun PluginPanelPage(
+    pluginId: String, hash: String, epoch: Long, panelId: String, conversationId: String?, issuerId: String = ""
+) {
     PluginPageFrame(stringResource(R.string.plugin_host_title)) {
         PluginHostContent { host ->
-            val lease = remember(pluginId, hash, epoch) { PackageLease(pluginId, hash, epoch) }
+            val lease = remember(pluginId, hash, epoch, issuerId) { PackageLease(pluginId, hash, epoch, issuerId) }
             val service: ChatService = koinInject()
             if (conversationId == null) {
                 PluginPanel(host, lease, panelId, null, service)
@@ -59,10 +61,16 @@ fun PluginPanelPage(pluginId: String, hash: String, epoch: Long, panelId: String
                     onDispose { service.removeConversationReference(id) }
                 }
                 var loaded by remember(id) { mutableStateOf(false) }
-                LaunchedEffect(id, service) { service.initializeConversation(id); loaded = true }
+                LaunchedEffect(id, service) {
+                    service.initializeConversation(id)
+                    loaded = true
+                }
                 val conversation by service.getConversationFlow(id).collectAsStateWithLifecycle()
-                if (loaded) PluginPanel(host, lease, panelId, conversation, service)
-                else Text(stringResource(R.string.plugin_host_loading))
+                if (loaded) {
+                    PluginPanel(host, lease, panelId, conversation, service)
+                } else {
+                    Text(stringResource(R.string.plugin_host_loading))
+                }
             }
         }
     }
@@ -149,13 +157,13 @@ private fun PluginPanel(
 }
 
 @Composable
-private fun PluginReceipts(conversation: Conversation?, pluginId: String, service: ChatService) {
+internal fun PluginReceipts(conversation: Conversation?, pluginId: String?, service: ChatService) {
     val scope = rememberCoroutineScope()
     conversation?.let { current ->
         val frame = current.currentMessages.map { it.sourceStamp() }
         PluginCard(stringResource(R.string.plugin_host_receipts)) {
             for (record in current.executionLedger().operations.values.filter {
-                it.call.handler.pluginId == pluginId &&
+                (pluginId == null || it.call.handler.pluginId == pluginId) &&
                     frame.take(it.call.frame.size).map { stamp -> stamp.id } == it.call.frame.map { stamp -> stamp.id }
             }.takeLast(10).reversed()) {
                 val label = when (record.status) {
@@ -165,6 +173,8 @@ private fun PluginReceipts(conversation: Conversation?, pluginId: String, servic
                     AttemptStatus.SETTLED -> R.string.plugin_host_settled
                     AttemptStatus.CANCELLED -> R.string.plugin_host_cancelled
                 }
+                Text(record.call.type)
+                Text(record.call.handler.packageHash)
                 Text(stringResource(label))
                 if (frame.take(record.call.frame.size) != record.call.frame) {
                     Text(stringResource(R.string.plugin_host_source_changed))

@@ -1,8 +1,8 @@
 package me.rerere.rikkahub.plugins
 
 import android.content.Context
-import dev.rikkahub.plugins.runtime.PluginHost
 import dev.rikkahub.plugins.core.GitHubPluginResolver
+import dev.rikkahub.plugins.runtime.PluginHost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
