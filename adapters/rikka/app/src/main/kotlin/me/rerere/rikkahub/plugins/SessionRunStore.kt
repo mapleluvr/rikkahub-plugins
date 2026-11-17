@@ -19,6 +19,11 @@ class SessionRunStore(private val session: ConversationSession) {
             val id = checkpoint.state.ref.runId
             val existing = ledger.runs[id]
             require(existing == null || existing == checkpoint) { "Run identity reused" }
+            if (existing == null) {
+                current.forInputPath(checkpoint.inputIds)
+                val present = current.messageNodes.flatMap { node -> node.messages.map { it.id.toString() } }.toSet()
+                require(checkpoint.requiredHistoryIds(ledger).all { it in present }) { "Run history was removed" }
+            }
             current.withExecutionLedger(ledger.copy(runs = ledger.runs + (id to checkpoint)))
         }
         return saved.executionLedger().runs.getValue(checkpoint.state.ref.runId)

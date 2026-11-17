@@ -113,6 +113,37 @@ class PersistentRunLifecycleTest {
         assertFalse(session.canStartNextTurn)
     }
 
+    @Test
+    fun missingRunInputOrCursorSurvivesColdLoadAsExplicitReconciliation() = runBlocking {
+        for (missingCursor in listOf(false, true)) {
+            val user = UIMessage.user("surviving input")
+            val original = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(user))
+            val ref = RunRef(original.id.toString(), user.id.toString(), "damaged")
+            val missing = Uuid.random().toString()
+            val checkpoint = RunCheckpoint(
+                RunState(ref, 5, 10, gates = mapOf("user" to Gate("user", GateKind.USER_PAUSE))),
+                "BeforeModel",
+                0,
+                inputIds = if (missingCursor) listOf(user.id.toString()) else listOf(user.id.toString(), missing),
+                messageId = missing.takeIf { missingCursor },
+            )
+            val source = original.withExecutionLedger(ExecutionLedger(runs = mapOf(ref.runId to checkpoint)))
+            val store = Store(source, false)
+            val session = ConversationSession(source.id, source, this, store, {})
+            session.initialize({ source })
+            val recovered = session.state.value.executionLedger().runs.getValue(ref.runId)
+            assertTrue("Missing input must have a durable reconciliation reason",
+                "host.history-missing" in recovered.state.gates)
+            assertEquals(checkpoint.inputIds, recovered.inputIds)
+            assertEquals(checkpoint.messageId, recovered.messageId)
+            assertTrue("user" in recovered.state.gates)
+            assertEquals(session.state.value, store.saved)
+            assertFalse(session.canStartNextTurn)
+            session.cancelPluginRuns()
+            assertTrue(session.canStartNextTurn)
+        }
+    }
+
     private class Store(var saved: Conversation, var draft: Boolean) : ConversationStore {
         override suspend fun prepareWrite(): (Conversation) -> Conversation = { it }
         override suspend fun write(previous: Conversation?, current: Conversation) {

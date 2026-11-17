@@ -77,6 +77,49 @@ class ChatServiceRecoveryTest {
     }
 
     @Test
+    fun missingHistoryColdResumeKeepsTheRunWaitingAndStopStillAllowsInput() = runBlocking {
+        val repo = GlobalContext.get().get<ConversationRepository>()
+        val service = GlobalContext.get().get<ChatService>()
+        val user = me.rerere.ai.ui.UIMessage.user("surviving input")
+        val initial = Conversation.ofId(Uuid.random()).copy(title = "damaged history")
+            .updateCurrentMessages(listOf(user))
+        val missing = Uuid.random().toString()
+        val ref = RunRef(initial.id.toString(), user.id.toString(), "damaged-run")
+        val checkpoint = RunCheckpoint(
+            RunState(ref, 5, 10),
+            "BeforeModel",
+            0,
+            inputIds = listOf(user.id.toString(), missing),
+            messageId = missing,
+        )
+        repo.insertConversation(initial.withExecutionLedger(ExecutionLedger(runs = mapOf(ref.runId to checkpoint))))
+        service.addConversationReference(initial.id)
+        try {
+            service.resumePluginRun(initial.id)
+            withTimeout(10000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
+            val waiting = repo.getConversationById(initial.id)!!
+            val saved = waiting.executionLedger().runs.getValue(ref.runId)
+            assertEquals(RunStatus.ACTIVE, saved.state.status)
+            assertEquals(checkpoint.inputIds, saved.inputIds)
+            assertEquals(missing, saved.messageId)
+            assertTrue(MISSING_RUN_HISTORY_GATE in saved.state.gates)
+            assertTrue(service.errors.value.none { it.conversationId == initial.id })
+            assertEquals(0, saved.state.attemptsUsed)
+            assertEquals(listOf(user), waiting.currentMessages)
+            service.stopGeneration(initial.id)
+            service.sendMessage(initial.id, listOf(UIMessagePart.Text("after stop")), answer = false)
+            withTimeout(10000) {
+                service.getConversationFlow(initial.id).first { it.currentMessages.lastOrNull()?.toText() == "after stop" }
+                service.getGenerationJobStateFlow(initial.id).first { it == null }
+            }
+            assertEquals("after stop", repo.getConversationById(initial.id)!!.currentMessages.last().toText())
+        } finally {
+            service.deleteConversation(initial.id)
+            service.removeConversationReference(initial.id)
+        }
+    }
+
+    @Test
     fun coldOrdinarySendKeepsPersistedPauseAndStopCancelsWithoutLiveJob() = runBlocking {
         val repo = GlobalContext.get().get<ConversationRepository>()
         val service = GlobalContext.get().get<ChatService>()

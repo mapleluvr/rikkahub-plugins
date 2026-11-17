@@ -41,12 +41,18 @@ object RunControl {
     fun admit(state: RunState, step: Int, preparedFrameRevision: Long): Admission {
         val reason = when {
             state.status != RunStatus.ACTIVE -> "Run is terminal"
+
             state.gates.isNotEmpty() -> "Run has unresolved gates"
+
             preparedFrameRevision != state.frameRevision -> "Prepared request is stale"
+
             step < 0 || step < state.stepsUsed - 1 || step > state.stepsUsed -> "Invalid step cursor"
+
             step == state.stepsUsed && state.stepsUsed + state.operationStepsUsed >= state.maxSteps ->
                 "Model step budget exhausted"
+
             state.attemptsUsed >= state.maxAttempts -> "Request attempt budget exhausted"
+
             else -> null
         }
         if (reason != null) return Admission(state, false, reason)

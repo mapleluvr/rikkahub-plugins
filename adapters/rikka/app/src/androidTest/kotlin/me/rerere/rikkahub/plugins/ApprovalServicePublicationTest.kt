@@ -110,6 +110,13 @@ class ApprovalServicePublicationTest {
             assertNotNull(pending.approvalId)
             assertTrue(JsonInstant.encodeToString(waiting.toDto()).contains(pending.approvalId!!))
             assertTrue(reply.getTools().all { it.startedAt == null && it.output.isEmpty() })
+            val waitingInMemory = service.getConversation(initial.id)
+            for (owned in listOf(user, reply)) {
+                val rejected = runCatching { service.deleteMessage(initial.id, owned.id) }.exceptionOrNull()
+                assertTrue("Deleting a message owned by the waiting run must be rejected", rejected is RunHistoryConflict)
+                assertEquals(waiting, repository.getConversationById(initial.id))
+                assertEquals(waitingInMemory, service.getConversation(initial.id))
+            }
             service.handleToolApproval(initial.id, pending.approvalId!!, approved = true, answer = "{\"q\":\"yes\"}")
             withTimeout(15000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
             val finished = repository.getConversationById(initial.id)!!

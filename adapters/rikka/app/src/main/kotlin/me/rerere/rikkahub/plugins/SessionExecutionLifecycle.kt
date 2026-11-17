@@ -51,11 +51,14 @@ fun Conversation.recoverPluginExecution(): Conversation {
                         request.definition != run.toolDefinitions[tool.toolName])
                 }
             }
-            if (run.state.status == RunStatus.ACTIVE && unboundPending) {
-                run.copy(state = RunControl.addGate(run.state, Gate(
-                    "host.approval-publication-incomplete",
-                    GateKind.PLUGIN_FAULT
-                )))
+            val missingHistory = run.requiredHistoryIds(records).any { it !in messages }
+            val reason = when {
+                missingHistory -> MISSING_RUN_HISTORY_GATE
+                unboundPending -> "host.approval-publication-incomplete"
+                else -> null
+            }
+            if (run.state.status == RunStatus.ACTIVE && reason != null) {
+                run.copy(state = RunControl.addGate(run.state, Gate(reason, GateKind.PLUGIN_FAULT)))
             } else {
                 run
             }
