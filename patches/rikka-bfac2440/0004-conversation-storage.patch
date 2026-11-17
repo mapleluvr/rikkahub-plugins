@@ -1,4 +1,4 @@
-From 719e0620055649e3e682d8f1dff76ca75cfcd64b Mon Sep 17 00:00:00 2001
+From 141f490094ff0856636e86986842244f51a3cc24 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 03:33:53 +0800
 Subject: [PATCH] Persist extension state and unpromoted drafts in the

@@ -1,0 +1,267 @@
+From 01d2bdd12b8a4343ffdb778c8bf86d46d93c64df Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Tue, 17 Nov 2026 09:50:06 +0800
+Subject: [PATCH] Publish confirmed approvals and separate regeneration from
+ recovery
+
+Patch-Id: atomic-approval-publication
+---
+ ai/src/main/java/me/rerere/ai/agent/Agent.kt  |  9 +++-
+ .../main/java/me/rerere/ai/agent/AgentLoop.kt | 17 +++++---
+ ai/src/main/java/me/rerere/ai/core/Tool.kt    | 10 +++++
+ .../rikkahub/data/ai/tools/MemoryTools.kt     |  5 ++-
+ .../rikkahub/data/ai/tools/WorkspaceTools.kt  |  2 +-
+ .../data/repository/WorkspaceRepository.kt    |  7 ++-
+ .../me/rerere/rikkahub/service/ChatService.kt | 43 +++++++++++++------
+ .../rikkahub/web/routes/ConversationRoutes.kt | 13 ++++++
+ 8 files changed, 81 insertions(+), 25 deletions(-)
+
+diff --git a/ai/src/main/java/me/rerere/ai/agent/Agent.kt b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+index 35fa4e16f5e7b88c849a522754a4020186ad47b8..6eb18ccdc4460dcfcce6acd0029cbdbd8cd42ac5 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/Agent.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/Agent.kt
+@@ -53,6 +53,11 @@ sealed interface AgentDecision {
+     data class Continue(val notice: UIMessagePart.Notice) : AgentDecision
+ }
+ 
++sealed interface AgentCheckpoint {
++    data class Committed(val message: UIMessage) : AgentCheckpoint
++    data class Rejected(val reason: String) : AgentCheckpoint
++}
++
+ interface AgentControl {
+     suspend fun decide(context: AgentBoundaryContext): AgentDecision = AgentDecision.Proceed
+ 
+@@ -63,9 +68,9 @@ interface AgentControl {
+     suspend fun commit(message: UIMessage) {}
+ 
+     /** Persist output and its next position together; a rejection leaves the output uncommitted and yields. */
+-    suspend fun checkpoint(message: UIMessage, cursor: AgentCursor): String? {
++    suspend fun checkpoint(message: UIMessage, cursor: AgentCursor): AgentCheckpoint {
+         commit(message)
+-        return null
++        return AgentCheckpoint.Committed(message)
+     }
+ 
+     /** A persisted unknown effect must wait before executable-cursor validation. */
+diff --git a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+index 8981294a2f8955a7dddfd225bef9ca190117e490..fe1cee44a2160ab66acfc7d922881b919c10c705 100644
+--- a/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
++++ b/ai/src/main/java/me/rerere/ai/agent/AgentLoop.kt
+@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
+ import kotlinx.serialization.json.put
+ import me.rerere.ai.core.MessageRole
+ import me.rerere.ai.core.sum
++import me.rerere.ai.core.uniqueToolRegistrations
+ import me.rerere.ai.provider.TextGenerationParams
+ import me.rerere.ai.ui.StreamChunkHandler
+ import me.rerere.ai.ui.ToolApprovalState
+@@ -33,6 +34,7 @@ internal class AgentLoop(
+     private val hooks: AgentHooks,
+     private val events: FlowCollector<AgentEvent>,
+ ) {
++    private val registrations = request.tools.uniqueToolRegistrations()
+     private val history: List<UIMessage>
+ 
+     // 本轮的助手消息；新的一轮在第一次请求模型时才创建
+@@ -360,7 +362,7 @@ internal class AgentLoop(
+         errorOutput("[${e.javaClass.name}] ${e.message}\n${e.stackTraceToString()}")
+     }
+ 
+-    private fun findTool(name: String) = request.tools.find { it.name == name }
++    private fun findTool(name: String) = registrations[name]
+ 
+     private suspend fun update(
+         updated: UIMessage,
+@@ -368,15 +370,20 @@ internal class AgentLoop(
+         toolCallId: String? = null,
+         nextStep: Int = logicalSteps,
+     ) {
+-        request.control.checkpoint(updated, AgentCursor(
++        val outcome = request.control.checkpoint(updated, AgentCursor(
+             nextBoundary,
+             nextStep,
+             toolCallId,
+             updated.id.toString(),
+             updated.getTools().map { AgentToolBinding(it.toolCallId, it.toolName, it.input) },
+-        ))?.let { throw AgentYield(cursor(nextBoundary, toolCallId), it) }
+-        message = updated
+-        events.emit(AgentEvent.MessageUpdated(updated))
++        ))
++        val confirmed = when (outcome) {
++            is AgentCheckpoint.Committed -> outcome.message
++            is AgentCheckpoint.Rejected -> throw AgentYield(cursor(nextBoundary, toolCallId), outcome.reason)
++        }
++        check(confirmed.id == updated.id) { "Checkpoint changed message identity" }
++        message = confirmed
++        events.emit(AgentEvent.MessageUpdated(confirmed))
+     }
+ 
+     // 生成中途的内容只发给调用方，这一步结束前循环内部一直基于原始内容合并
+diff --git a/ai/src/main/java/me/rerere/ai/core/Tool.kt b/ai/src/main/java/me/rerere/ai/core/Tool.kt
+index 213ddc3f7b74a54fbcfae80506fb4874a2a66569..1366d0f6dcee7e189bd42afeeb69fd603faa3a42 100644
+--- a/ai/src/main/java/me/rerere/ai/core/Tool.kt
++++ b/ai/src/main/java/me/rerere/ai/core/Tool.kt
+@@ -22,6 +22,16 @@ data class Tool(
+     val execute: suspend (JsonElement) -> List<UIMessagePart>
+ )
+ 
++/** Reject ambiguous public names before model preparation, approval, or effect lookup. */
++fun List<Tool>.uniqueToolRegistrations(): Map<String, Tool> = buildMap {
++    for (tool in this@uniqueToolRegistrations) {
++        val previous = put(tool.name, tool)
++        require(previous == null) {
++            "Duplicate tool registration '${tool.name}': ${previous?.executionVersion} and ${tool.executionVersion}"
++        }
++    }
++}
++
+ @Serializable
+ sealed class InputSchema {
+     @Serializable
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/tools/MemoryTools.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/tools/MemoryTools.kt
+index 69ce0008e53d2f0c6bb1795263dfb8ea90774ad8..bc2295ed93870d5320508cbce21e11c909fe25e0 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/tools/MemoryTools.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/tools/MemoryTools.kt
+@@ -203,7 +203,10 @@ fun buildMemoryTools(
+             }
+         }
+     ),
+-)
++).map { tool ->
++    // The closure always uses this exact library. Rebuilding for another owner invalidates a pending batch.
++    tool.copy(executionVersion = "memory-v1/$assistantId")
++}
+ 
+ /** 这次工具调用成功改动的记忆文件路径；不是写工具、还没执行或写入被拒绝时返回 null */
+ fun UIMessagePart.Tool.memoryWritePath(): String? {
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/ai/tools/WorkspaceTools.kt b/app/src/main/java/me/rerere/rikkahub/data/ai/tools/WorkspaceTools.kt
+index 97d733771cb5ee3ef291658889fd44578765f742..ac6ed97ccf4f6993c422d7f160ed07c8474afd73 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/ai/tools/WorkspaceTools.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/ai/tools/WorkspaceTools.kt
+@@ -51,8 +51,8 @@ suspend fun createWorkspaceTools(
+     backgroundShellManager: BackgroundShellManager? = null,
+ ): List<Tool> {
+     if (workspaceId.isNullOrBlank()) return emptyList()
+-    val layout = workspaceRepository.layout(workspaceId) ?: return emptyList()
+     val workspace = workspaceRepository.getById(workspaceId) ?: return emptyList()
++    val layout = workspaceRepository.layout(workspace) ?: return emptyList()
+     val approvalOverrides = workspace.toolApprovalOverrides()
+     fun needsApproval(name: String) = resolveWorkspaceToolApproval(name, approvalOverrides)
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/data/repository/WorkspaceRepository.kt b/app/src/main/java/me/rerere/rikkahub/data/repository/WorkspaceRepository.kt
+index 805199eea99336b5fb33dbbd8667022efd3366ba..c7a6c71d108001edf845ca4b53bb979958221560 100644
+--- a/app/src/main/java/me/rerere/rikkahub/data/repository/WorkspaceRepository.kt
++++ b/app/src/main/java/me/rerere/rikkahub/data/repository/WorkspaceRepository.kt
+@@ -237,9 +237,12 @@ class WorkspaceRepository(
+     }
+ 
+     /** 工作区在执行环境内的目录约定, 工作区不存在时返回 null */
+-    suspend fun layout(id: String): WorkspaceLayout? = dao.getById(id)?.let { workspace ->
++    suspend fun layout(id: String): WorkspaceLayout? = dao.getById(id)?.let(::layout)
++
++    /** Derive policy and paths from the same immutable entity used to bind an execution version. */
++    fun layout(workspace: WorkspaceEntity): WorkspaceLayout? {
+         // 只需要目录约定, 不解密凭据也不建立连接
+-        if (workspace.isSsh()) {
++        return if (workspace.isSsh()) {
+             workspace.sshSettings()?.let { SshWorkspaceBackend.layoutOf(it.remoteDir) }
+         } else {
+             manager.layout(workspace.extraBindMounts())
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 732c7f452ebd67b22f9f847213b4990b2a630bf4..edadd47ac8b5fbf24fc97496c7cc292f3bd25b94 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -632,21 +632,18 @@ class ChatService(
+                     previousJob?.join()
+                     session.replyMessageId.value = null
+                     ensureInitialized(session)
+-                    val node = session.state.value.getMessageNodeByMessageId(messageId)
+-                        ?: return@launchGenerationJob
+-
+-                    if (node.role == MessageRole.USER) {
+-                        session.tryUpdate { conversation ->
+-                            val index = conversation.messageNodes.indexOfFirst { it.id == node.id }
+-                            // 查找之后这条消息被删掉了
+-                            if (index == -1) return@tryUpdate null
+-                            conversation.copy(messageNodes = conversation.messageNodes.take(index + 1))
+-                        } ?: return@launchGenerationJob
+-                        session.flush()
+-                        runTurn(session)
+-                    } else {
+-                        runTurn(session, regenerateNodeId = node.id)
++                    val prepared = session.commitExtension { current ->
++                        check(!current.hasUnfinishedPluginRun()) {
++                            "An unfinished run owns this history. Resume or Stop it before regenerating."
++                        }
++                        val target = current.getMessageNodeByMessageId(messageId) ?: return@commitExtension current
++                        if (target.role == MessageRole.USER) {
++                            val index = current.messageNodes.indexOfFirst { it.id == target.id }
++                            current.copy(messageNodes = current.messageNodes.take(index + 1))
++                        } else current
+                     }
++                    val node = prepared.getMessageNodeByMessageId(messageId) ?: return@launchGenerationJob
++                    runTurn(session, regenerateNodeId = node.id.takeUnless { node.role == MessageRole.USER })
+ 
+                 } catch (e: Exception) {
+                     reportFailure(session, e, R.string.error_title_regenerate_message)
+@@ -657,6 +654,24 @@ class ChatService(
+         }
+     }
+ 
++    /** Resume the persisted intent without selecting or truncating any page history. Gates still apply. */
++    fun resumePluginRun(conversationId: Uuid) {
++        val session = sessionManager.getOrCreate(conversationId)
++        synchronized(session) {
++            val previous = session.getJob()
++            val job = launchGenerationJob(conversationId = conversationId) {
++                try {
++                    previous?.join()
++                    ensureInitialized(session)
++                    if (session.state.value.hasUnfinishedPluginRun()) runTurn(session)
++                } catch (error: Exception) {
++                    reportFailure(session, error, R.string.error_title_regenerate_message)
++                }
++            }
++            session.setJob(job, cancelPrevious = false)
++        }
++    }
++
+     // ---- 处理工具调用审批 ----
+ 
+     fun handleToolApproval(
+diff --git a/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt b/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+index 0bd7adafb570f792bd267b35321d46b52c9de02b..5d768a972dabae2f42194baa7cd869f69e720190 100644
+--- a/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
++++ b/app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+@@ -21,6 +21,7 @@ import me.rerere.rikkahub.data.datastore.findModelById
+ import me.rerere.rikkahub.data.repository.ConversationRepository
+ import me.rerere.rikkahub.data.repository.FolderRepository
+ import me.rerere.rikkahub.service.ChatService
++import me.rerere.rikkahub.plugins.hasUnfinishedPluginRun
+ import me.rerere.rikkahub.web.BadRequestException
+ import me.rerere.rikkahub.web.NotFoundException
+ import me.rerere.rikkahub.web.dto.ConversationDto
+@@ -359,10 +360,22 @@ fun Route.conversationRoutes(
+                 throw NotFoundException("Message not found")
+             }
+ 
++            if (conversation.hasUnfinishedPluginRun()) {
++                call.respond(HttpStatusCode.Conflict, mapOf("error" to "Resume or stop the unfinished run before regenerating"))
++                return@post
++            }
+             chatService.regenerateAtMessage(uuid, messageId)
+             call.respond(HttpStatusCode.Accepted, mapOf("status" to "accepted"))
+         }
+ 
++        // Resume the original persisted intent; this never resolves permission or user-pause gates.
++        post("/{id}/resume") {
++            val uuid = call.parameters["id"].toUuid("conversation id")
++            chatService.initializeConversation(uuid)
++            chatService.resumePluginRun(uuid)
++            call.respond(HttpStatusCode.Accepted, mapOf("status" to "accepted"))
++        }
++
+         // POST /api/conversations/{id}/stop - Stop generation
+         post("/{id}/stop") {
+             val uuid = call.parameters["id"].toUuid("conversation id")
