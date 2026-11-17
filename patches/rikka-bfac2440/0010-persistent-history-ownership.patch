@@ -1,4 +1,4 @@
-From 3536c630cc03fb5d8476fa5319e4630133a181ab Mon Sep 17 00:00:00 2001
+From 488d736fdcb0248567b7e0810a9a2266168ddf38 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 10:47:14 +0800
 Subject: [PATCH] Apply shared history ownership to user commands and cold

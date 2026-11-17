@@ -1,0 +1,129 @@
+From 2a213aec2ad627847e3f95b99f222e98fa1629ca Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Wed, 18 Nov 2026 00:00:37 +0800
+Subject: [PATCH] Revalidate owning run packages and exclude installation
+ authority from backup
+
+Patch-Id: install-local-run-authorization
+---
+ .../me/rerere/rikkahub/service/ChatService.kt | 36 ++++++++++++++-----
+ app/src/main/res/xml/backup_rules.xml         |  4 ++-
+ .../main/res/xml/data_extraction_rules.xml    | 11 ++----
+ 3 files changed, 34 insertions(+), 17 deletions(-)
+
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+index 8f2dde90dbf64b371384c50b5edfe401632d4649..921de3b3625ccdb4f6c6b0dab21bbc1b0074d0f4 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatService.kt
+@@ -127,13 +127,28 @@ class ChatService(
+         val turn = requestFactory.createContext(settingsStore.awaitLoaded(), source)
+         requestFactory.generateCompressionSummary(turn, source.projectedContext(messages), prompt, beforeEffect)
+     }
+-    private val operationDispatcher = SessionOperationDispatcher(listOf(builtinContext.operation)) { lease, _ ->
++    private val operationDispatcher = SessionOperationDispatcher(listOf(builtinContext.operation),
++        packageAuthorization = { leases ->
++            leases.isEmpty() || (pluginManager?.state?.value as? PluginHostLoad.Ready)?.host
++                ?.authorizedPackages(leases) == true
++        }) { lease, _ ->
+         lease.pluginId !in settingsStore.settingsFlow.value.disabledPluginFeatures
+     }
+ 
+-    private suspend fun dispatcherFor(call: OperationCall): SessionOperationDispatcher =
+-        if (call.handler == builtinContext.operation.lease) operationDispatcher
+-        else requireNotNull(pluginManager) { "Plugin host is unavailable" }.host().operationDispatcher()
++    private suspend fun dispatcherFor(call: OperationCall): SessionOperationDispatcher {
++        if (call.handler != builtinContext.operation.lease) {
++            return requireNotNull(pluginManager) { "Plugin host is unavailable" }.host().operationDispatcher()
++        }
++        if (call.run != null) {
++            try {
++                pluginManager?.host()
++            } catch (error: Exception) {
++                if (error is CancellationException) throw error
++                // The dispatcher blocks only runs that actually own unavailable packages.
++            }
++        }
++        return operationDispatcher
++    }
+ 
+     /** 一次 agent 运行发给模型的消息，和回复要写进的节点 */
+     private class ReplyTarget(val history: List<UIMessage>, val nodeId: Uuid) {
+@@ -781,7 +796,8 @@ class ChatService(
+             } catch (error: Exception) {
+                 if (error is CancellationException) throw error
+                 addError(error, conversationId)
+-                if (!activeRun?.pluginLeases.isNullOrEmpty()) {
++                if (!activeRun?.pluginLeases.isNullOrEmpty() || !conversation.packageSelection()?.packages.isNullOrEmpty()) {
++                    activeRun?.let { SessionAgentRun.markPackageUnavailable(session, it.state.ref) }
+                     session.inbox.pause()
+                     appEventBus.emit(AppEvent.ChatGenerationSegmentEnded(conversationId))
+                     return TurnResult.Waiting
+@@ -790,10 +806,12 @@ class ChatService(
+             }
+             if (activeRun != null && pluginHost != null && activeRun.pluginLeases.any {
+                 val installed = pluginHost.state.value.packages[it.packageHash]
+-                installed == null || installed.manifest.id != it.pluginId
++                installed == null || installed.manifest.id != it.pluginId ||
++                    !pluginHost.authorized(it, installed.manifest.capabilities)
+             }) {
++                SessionAgentRun.markPackageUnavailable(session, activeRun.state.ref)
+                 session.inbox.pause()
+-                addError(IllegalStateException("Pinned plugin package is unavailable; restore it or stop this run"),
++                addError(IllegalStateException("Pinned plugin package is unavailable or authorization expired; restore it or stop this run"),
+                     conversationId)
+                 appEventBus.emit(AppEvent.ChatGenerationSegmentEnded(conversationId))
+                 return TurnResult.Waiting
+@@ -802,7 +820,9 @@ class ChatService(
+                 session.capturePackageSelection(it.state.value)
+             }.orEmpty()
+             val run = SessionAgentRun.open(session, initialTarget.history, initialTarget.nodeId,
+-                pluginLeases = selectedPackages) { boundary, ref ->
++                pluginLeases = selectedPackages, packageAuthorization = { leases ->
++                    leases.isEmpty() || pluginHost?.authorizedPackages(leases) == true
++                }) { boundary, ref ->
+                 builtinContext.boundaryDecision(
+                     session, ref, boundary, settingsStore.settingsFlow.value, turn.model, canCompress, afterOperation
+                 )
+diff --git a/app/src/main/res/xml/backup_rules.xml b/app/src/main/res/xml/backup_rules.xml
+index 90a8d8694bcef31e28910f7ea800a5dd9466dd99..40e5893b9892fb5ca47e7b281363a0b533ce7334 100644
+--- a/app/src/main/res/xml/backup_rules.xml
++++ b/app/src/main/res/xml/backup_rules.xml
+@@ -2,11 +2,13 @@
+    Sample backup rules file; uncomment and customize as necessary.
+    See https://developer.android.com/guide/topics/data/autobackup
+    for details.
+-   Note: This file is ignored for devices older than API 31
++   Note: API 31+ uses data_extraction_rules.xml when declared by the manifest.
+    See https://developer.android.com/about/versions/12/backup-restore
+ -->
+ <full-backup-content>
+   <include
+     domain="file"
+     path="upload/" />
++  <!-- Keep the older upload-only policy and explicitly exclude the retired plugin directory. -->
++  <exclude domain="file" path="plugin-host/" />
+ </full-backup-content>
+diff --git a/app/src/main/res/xml/data_extraction_rules.xml b/app/src/main/res/xml/data_extraction_rules.xml
+index bd4119143fc93fd0e1122104854b2f82cc9d6540..0317201acb9656eb1edc133d57e3221d37a49a5f 100644
+--- a/app/src/main/res/xml/data_extraction_rules.xml
++++ b/app/src/main/res/xml/data_extraction_rules.xml
+@@ -5,15 +5,10 @@
+ -->
+ <data-extraction-rules>
+   <cloud-backup>
+-    <!-- TODO: Use <include> and <exclude> to control what is backed up.
+-    <include .../>
+-    <exclude .../>
+-    -->
++    <!-- Legacy plugin bytes and activation metadata must not enter system backups. -->
++    <exclude domain="file" path="plugin-host/" />
+   </cloud-backup>
+-  <!--
+   <device-transfer>
+-      <include .../>
+-      <exclude .../>
++    <exclude domain="file" path="plugin-host/" />
+   </device-transfer>
+-  -->
+ </data-extraction-rules>
+\ No newline at end of file
