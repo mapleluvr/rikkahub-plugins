@@ -181,6 +181,33 @@ class PluginHostTest {
         }
     }
 
+    @Test fun lifecycleManagementInsideOwnedInvocationRejectsBeforeItCanJoinItself() = runBlocking {
+        val root = Files.createTempDirectory(context.cacheDir.toPath(), "host-self-").toFile()
+        val host = PluginHost.open(context, root)
+        try {
+            val record = host.activate(host.prepare(archive("1.0.0")), grants)
+            host.withInstance(record.lease) { first ->
+                val disabled = withTimeout(2000) { async { runCatching { host.disable(pluginId) } }.await() }
+                assertTrue(disabled.exceptionOrNull() is IllegalStateException)
+                assertTrue(host.authorized(record.lease, grants))
+                host.withInstance(record.lease) {
+                    val closed = withTimeout(2000) { async { runCatching { host.close() } }.await() }
+                    assertTrue(closed.exceptionOrNull() is IllegalStateException)
+                }
+                assertEquals(
+                    "1.0.0:1",
+                    PluginContract.result(record.manifest, first.invoke("operation", "report", JsonNull))
+                        .artifacts.single().content.jsonPrimitive.content,
+                )
+            }
+            host.disable(pluginId)
+            assertFalse(host.authorized(record.lease, grants))
+        } finally {
+            host.close()
+            root.deleteRecursively()
+        }
+    }
+
     private fun archive(
         version: String,
         source: String = """

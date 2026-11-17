@@ -13,6 +13,7 @@ import me.rerere.ai.ui.*
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.withToolApproval
 import me.rerere.rikkahub.service.ConversationSession
+import me.rerere.rikkahub.service.ConversationStore
 import me.rerere.rikkahub.service.FakeConversationStore
 import org.junit.Assert.*
 import org.junit.Test
@@ -423,6 +424,89 @@ class SessionAgentRunTest {
             assertEquals(first.ref, resumed.ref)
             assertEquals(selection, resumed.pluginLeases)
             assertEquals(selection, store.persisted!!.executionLedger().runs.getValue(first.ref.runId).pluginLeases)
+        }
+    }
+
+    @Test fun revocationDuringAdmissionPreparationDoesNotChargeOrInventAnUnknownRequest() = runBlocking {
+        verifyKnownUndispatchedRevocation(duringWrite = false)
+    }
+
+    @Test fun revocationDuringAdmissionPersistenceDoesNotChargeOrInventAnUnknownRequest() = runBlocking {
+        verifyKnownUndispatchedRevocation(duringWrite = true)
+    }
+
+    private suspend fun verifyKnownUndispatchedRevocation(duringWrite: Boolean) = coroutineScope {
+        val initial = Conversation.ofId(Uuid.random()).updateCurrentMessages(listOf(UIMessage.user("private input")))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var armed = false
+        var persisted = initial
+        var authorized = true
+        val store = object : ConversationStore {
+            override suspend fun prepareWrite(): (Conversation) -> Conversation {
+                if (armed && !duringWrite) {
+                    armed = false
+                    entered.complete(Unit)
+                    release.await()
+                }
+                return { it }
+            }
+            override suspend fun write(previous: Conversation?, current: Conversation) {
+                if (armed && duringWrite) {
+                    armed = false
+                    entered.complete(Unit)
+                    release.await()
+                }
+                persisted = current
+            }
+        }
+        val session = ConversationSession(initial.id, initial, this, store, {}).also {
+            it.initialize({ persisted })
+        }
+        val lease = PackageLease("dev.example.original", "a".repeat(64), 1, Uuid.random().toString())
+        val run = SessionAgentRun.open(
+            session, initial.currentMessages, pluginLeases = listOf(lease), packageAuthorization = { authorized }
+        ) { _, _ -> null }
+        val provider = ScriptedProvider()
+        val plan = run.resumePlan()
+        val preparation = object : AgentHooks by hooks {
+            override suspend fun prepareStep(messages: List<UIMessage>): StepRequest = hooks.prepareStep(messages)
+                .also { armed = true }
+        }
+        val work = async {
+            runAgent(run.bind(request(provider, plan.history), plan), run.hooks(preparation)).toList()
+        }
+        try {
+            withTimeout(10_000) { entered.await() }
+            authorized = false
+            release.complete(Unit)
+            val events = withTimeout(10_000) { work.await() }
+            events.forEach { run.accept(it) }
+            assertTrue(events.last() is AgentEvent.Yielded)
+            assertEquals(0, provider.calls)
+            val saved = persisted.executionLedger().runs.getValue(run.ref.runId)
+            assertEquals("An undispatched request cannot consume an attempt", 0, saved.state.attemptsUsed)
+            assertEquals("An undispatched request cannot consume a model step", 0, saved.state.stepsUsed)
+            assertEquals(0, saved.nextStep)
+            assertEquals(listOf(lease), saved.pluginLeases)
+            assertTrue("host.package-authorization" in saved.state.gates)
+            authorized = true
+            val reopened = ConversationSession(initial.id, persisted, this, store, {}).also {
+                it.initialize({ persisted })
+            }
+            val resumed = SessionAgentRun.open(
+                reopened, reopened.state.value.currentMessages, packageAuthorization = { authorized }
+            ) { _, _ -> null }
+            val recovered = reopened.state.value.executionLedger().runs.getValue(run.ref.runId)
+            assertEquals(run.ref, resumed.ref)
+            assertFalse("Known non-dispatch must not become unknown on reopen", "host.recovery" in recovered.state.gates)
+            val freshPlan = resumed.resumePlan()
+            runAgent(resumed.bind(request(provider, freshPlan.history), freshPlan), resumed.hooks(hooks))
+                .collect(resumed::accept)
+            assertEquals("Renewed authority allows exactly one request on the same logical run", 1, provider.calls)
+        } finally {
+            release.complete(Unit)
+            work.cancelAndJoin()
         }
     }
 

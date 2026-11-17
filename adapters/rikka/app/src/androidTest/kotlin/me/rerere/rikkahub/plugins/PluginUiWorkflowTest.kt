@@ -90,7 +90,9 @@ class PluginUiWorkflowTest {
             assertEquals(AttemptStatus.SETTLED, receipt.status)
             assertEquals(
                 2,
-                receipt.result!!.artifacts.single().content.jsonObject.getValue("messages").jsonPrimitive.content.toInt()
+                receipt.result!!.artifacts.single().content.jsonObject.getValue(
+                    "messages"
+                ).jsonPrimitive.content.toInt()
             )
             assertEquals(conversation.currentMessages.map { it.id }, confirmed.currentMessages.map { it.id })
             assertTrue(confirmed.executionLedger().runs.isEmpty())

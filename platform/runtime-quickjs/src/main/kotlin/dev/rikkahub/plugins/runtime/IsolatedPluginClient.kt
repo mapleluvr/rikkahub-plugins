@@ -10,6 +10,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import dev.rikkahub.plugins.core.ExecutionAuthority
 import dev.rikkahub.plugins.core.PluginArchive
 import dev.rikkahub.plugins.core.PluginContract
 import dev.rikkahub.plugins.core.VerifiedPluginPackage
@@ -41,6 +42,7 @@ class IsolatedPluginClient private constructor(
     val pkg: VerifiedPluginPackage,
     val lease: PackageLease,
     private val authorized: (PackageLease, Set<String>) -> Boolean,
+    private val execution: ExecutionAuthority.Scope?,
 ) {
     private val handle = UUID.randomUUID().toString()
     private val connected = CompletableDeferred<Messenger>()
@@ -147,6 +149,7 @@ class IsolatedPluginClient private constructor(
     }
 
     private fun checkAuthorized() {
+        execution?.check()
         check(!closed && authorized(lease, pkg.manifest.capabilities)) { "Plugin permission or lease was revoked" }
     }
 
@@ -157,7 +160,12 @@ class IsolatedPluginClient private constructor(
         pending[id] = response
         try {
             RuntimeTransport.withOutgoing(context.cacheDir, bytes) { descriptor ->
-                remote.send(Message.obtain().apply {
+                if (action == RuntimeTransport.CALL) {
+                    checkAuthorized()
+                    execution?.binding?.beforeDispatch?.invoke()
+                    checkAuthorized()
+                }
+                val message = Message.obtain().apply {
                     what = action
                     arg1 = id
                     replyTo = replies
@@ -167,7 +175,13 @@ class IsolatedPluginClient private constructor(
                         putLong("epoch", lease.activationEpoch)
                         if (descriptor != null) putParcelable("payload", descriptor)
                     }
-                })
+                }
+                // Payload preparation and durable admission stay outside the lock; CLOSE is cleanup only.
+                if (action == RuntimeTransport.CLOSE || execution == null) {
+                    remote.send(message)
+                } else {
+                    execution.dispatch { remote.send(message) }
+                }
             }
             val bundle = response.receive()
             try {
@@ -188,11 +202,19 @@ class IsolatedPluginClient private constructor(
             bytes: ByteArray,
             lease: PackageLease,
             authorized: (PackageLease, Set<String>) -> Boolean,
+        ): IsolatedPluginClient = prepare(context, bytes, lease, authorized, null)
+
+        internal suspend fun prepare(
+            context: Context,
+            bytes: ByteArray,
+            lease: PackageLease,
+            authorized: (PackageLease, Set<String>) -> Boolean,
+            execution: ExecutionAuthority.Scope?,
         ): IsolatedPluginClient {
             val snapshot = bytes.copyOf()
             val pkg = PluginArchive.decode(snapshot, lease.packageHash)
             require(lease.pluginId == pkg.manifest.id && lease.activationEpoch > 0)
-            val client = IsolatedPluginClient(context.applicationContext, pkg, lease, authorized)
+            val client = IsolatedPluginClient(context.applicationContext, pkg, lease, authorized, execution)
             try {
                 withContext(Dispatchers.Main.immediate) {
                     client.bound = client.context.bindService(

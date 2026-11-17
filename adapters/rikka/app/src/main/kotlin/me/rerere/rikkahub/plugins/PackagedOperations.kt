@@ -26,8 +26,10 @@ fun PluginHost.operationDefinitions(): List<ConversationOperation> = state.value
                         "Conversation plugin version changed"
                     )
                 }, execute = { execution ->
-                    execution.beforeEffect()
-                    withInstance(installed.lease) { instance ->
+                    withInstance(
+                        installed.lease,
+                        execution.executionBinding.copy(beforeDispatch = execution.beforeEffect),
+                    ) { instance ->
                         val result = instance.invoke("operation", declaration.id, input) {
                             PluginContract.json.encodeToJsonElement(messages)
                         }

@@ -1,5 +1,8 @@
 package me.rerere.rikkahub.plugins
 
+import dev.rikkahub.plugins.core.ExecutionAuthorizationRevoked
+import dev.rikkahub.plugins.core.ExecutionBinding
+import dev.rikkahub.plugins.core.ModelAttemptLedger
 import dev.rikkahub.plugins.core.RunControl
 import dev.rikkahub.plugins.protocol.*
 import me.rerere.ai.agent.*
@@ -39,6 +42,17 @@ class SessionAgentRun private constructor(
         private set
 
     val pluginLeases: List<PackageLease> get() = snapshot().pluginLeases
+
+    /** Native tool execution follows the logical run, not a page branch or only the called package. */
+    fun runtimeBinding(): ExecutionBinding {
+        val leases = pluginLeases.toList()
+        return ExecutionBinding(leases, validate = {
+            val saved = snapshot()
+            if (saved.pluginLeases != leases || blocked() != null || saved.state.frameRevision != preparedFrame) {
+                throw ExecutionAuthorizationRevoked()
+            }
+        })
+    }
 
     private fun snapshot() = session.state.value.executionLedger().runs.getValue(ref.runId)
     private fun blocked(): String? = snapshot().let { saved ->
@@ -100,6 +114,7 @@ class SessionAgentRun private constructor(
                 me.rerere.rikkahub.BuildConfig.VERSION_CODE.toString()
             ).joinToString("\n")
         }
+        var modelReservationId: String? = null
         val control = object : AgentControl {
             override suspend fun decide(context: AgentBoundaryContext): AgentDecision {
                 saveCursor(context.cursor)
@@ -142,8 +157,21 @@ class SessionAgentRun private constructor(
                 return AgentDecision.Proceed
             }
 
-            override suspend fun prepareModel(step: Int, attempt: Int): String? =
-                blocked() ?: staleInput() ?: store.admit(ref, step, preparedFrame).reason
+            override suspend fun prepareModel(step: Int, attempt: Int): String? {
+                modelReservationId = null
+                (blocked() ?: staleInput())?.let { return it }
+                val id = Uuid.random().toString().also { modelReservationId = it }
+                return store.admit(ref, step, preparedFrame, id) { it.withPackageGate() }.reason
+            }
+
+            override suspend fun beginModel(step: Int, attempt: Int): String? =
+                blocked() ?: staleInput() ?: store.startModelDispatch(
+                    ref, checkNotNull(modelReservationId), preparedFrame
+                ) { it.withPackageGate() }.reason
+
+            override suspend fun modelNotDispatched(step: Int, attempt: Int) {
+                modelReservationId?.let { id -> store.refuseModelDispatch(ref, id) { it.withPackageGate() } }
+            }
 
             override fun admitModel(step: Int, attempt: Int): String? = blocked() ?: staleInput()
                 ?: if (snapshot().state.frameRevision != preparedFrame) "Prepared request is stale" else null
@@ -220,7 +248,7 @@ class SessionAgentRun private constructor(
                             ).joinToString("\n"))
                         }
                     }
-                    val checkpoint = saved.copy(
+                    val checkpoint = ModelAttemptLedger.confirm(saved, next.nextStep).copy(
                         consumedToolPermits = permits,
                         boundary = next.boundary.name,
                         nextStep = next.nextStep,
@@ -410,7 +438,7 @@ class SessionAgentRun private constructor(
                             AgentToolBinding(it.id, it.name, it.input)
                         }
                     )
-                    if (saved.state.stepsUsed > saved.nextStep ||
+                    if (ModelAttemptLedger.needsReconciliation(saved) ||
                         session.state.value.messageNodes.flatMap { it.messages }
                             .firstOrNull { it.id.toString() == saved.messageId }?.getTools().orEmpty()
                             .any { !it.isExecuted && it.startedAt != null }) {

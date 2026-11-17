@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.plugins
 
 import dev.rikkahub.plugins.core.Admission
+import dev.rikkahub.plugins.core.ModelAttemptLedger
 import dev.rikkahub.plugins.core.RunControl
 import dev.rikkahub.plugins.protocol.Gate
 import dev.rikkahub.plugins.protocol.RunCheckpoint
@@ -41,16 +42,43 @@ class SessionRunStore(private val session: ConversationSession) {
         it.copy(state = RunControl.cancel(it.state))
     }
 
-    suspend fun admit(ref: RunRef, step: Int, preparedFrameRevision: Long): Admission {
-        // commitExtension may re-evaluate after settings preparation; return the final evaluation.
+    suspend fun admit(
+        ref: RunRef,
+        step: Int,
+        preparedFrameRevision: Long,
+        reservationId: String = kotlin.uuid.Uuid.random().toString(),
+        validate: (RunCheckpoint) -> RunCheckpoint = { it },
+    ): Admission {
+        // Both candidate evaluations revalidate leases; preparation never spends an external dispatch.
         var admission: Admission? = null
-        update(ref) {
-            val result = RunControl.admit(it.state, step, preparedFrameRevision)
+        update(ref) { saved ->
+            val (next, result) = ModelAttemptLedger.reserve(validate(saved), step, preparedFrameRevision, reservationId)
             admission = result
-            it.copy(state = result.state)
+            next
         }
         return checkNotNull(admission)
     }
+
+    suspend fun startModelDispatch(
+        ref: RunRef,
+        reservationId: String,
+        preparedFrameRevision: Long,
+        validate: (RunCheckpoint) -> RunCheckpoint,
+    ): Admission {
+        var admission: Admission? = null
+        update(ref) { saved ->
+            val (next, result) = ModelAttemptLedger.start(validate(saved), reservationId, preparedFrameRevision)
+            admission = result
+            next
+        }
+        return checkNotNull(admission)
+    }
+
+    suspend fun refuseModelDispatch(
+        ref: RunRef,
+        reservationId: String,
+        validate: (RunCheckpoint) -> RunCheckpoint,
+    ) = update(ref) { ModelAttemptLedger.refuse(validate(it), reservationId) }
 
     /** Commit the cursor and corresponding assistant/tool result in one conversation write. */
     suspend fun checkpoint(
@@ -65,7 +93,8 @@ class SessionRunStore(private val session: ConversationSession) {
             val ledger = current.executionLedger()
             val old = requireRun(current, ref)
             require(nextStep in old.nextStep..old.state.stepsUsed) { "Invalid completed-step cursor" }
-            val next = old.copy(boundary = boundary, nextStep = nextStep, toolCallId = toolCallId)
+            val next = ModelAttemptLedger.confirm(old, nextStep)
+                .copy(boundary = boundary, nextStep = nextStep, toolCallId = toolCallId)
             updateMessages(current).withExecutionLedger(ledger.copy(runs = ledger.runs + (ref.runId to next)))
         }
         return saved.executionLedger().runs.getValue(ref.runId)

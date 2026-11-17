@@ -25,6 +25,20 @@ data class OperationRecord(
 )
 
 @Serializable
+enum class ModelAttemptPhase { RESERVED, DISPATCH_INTENT, COMPLETED, REFUSED }
+
+/** A reservation is provably not dispatched; an intent may have crossed the external boundary. */
+@Serializable
+data class ModelAttemptRecord(
+    val id: String,
+    val step: Int,
+    val phase: ModelAttemptPhase = ModelAttemptPhase.RESERVED,
+    val chargedStep: Boolean,
+    /** A refused retry must not erase uncertainty from an earlier dispatched attempt. */
+    val priorDispatchUnconfirmed: Boolean = false,
+)
+
+@Serializable
 data class ToolCallStamp(val id: String, val name: String, val input: String)
 
 /** A host-issued request for one human decision; scoped by its owning RunCheckpoint. */
@@ -55,6 +69,8 @@ data class RunCheckpoint(
     val approvalRequests: Map<String, ToolApprovalRequestRecord> = emptyMap(),
     /** Exact packages selected when this logical run was created, including an explicitly empty selection. */
     val pluginLeases: List<PackageLease> = emptyList(),
+    /** Absent on legacy records, which retain conservative counter-based recovery. */
+    val modelAttempt: ModelAttemptRecord? = null,
 )
 
 /** One versioned host envelope. Unknown envelope versions must never execute. */

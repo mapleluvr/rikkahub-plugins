@@ -22,7 +22,7 @@ internal object RuntimeTransport {
     const val LIMIT = 6 * 1024 * 1024
 
     /** No descriptor crosses a cancellable dispatcher boundary without an owner. */
-    suspend fun withOutgoing(directory: File, bytes: ByteArray?, send: (ParcelFileDescriptor?) -> Unit) {
+    suspend fun withOutgoing(directory: File, bytes: ByteArray?, send: suspend (ParcelFileDescriptor?) -> Unit) {
         withContext(Dispatchers.IO) {
             if (bytes == null) {
                 send(null)

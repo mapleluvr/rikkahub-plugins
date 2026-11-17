@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.plugins
 
+import dev.rikkahub.plugins.core.ExecutionBinding
 import dev.rikkahub.plugins.core.PluginContract
 import dev.rikkahub.plugins.protocol.PackageLease
 import dev.rikkahub.plugins.protocol.PluginContextMessage
@@ -36,7 +37,12 @@ fun pluginToolName(pluginId: String, toolId: String): String {
 fun PluginHost.toolDefinitions(
     leases: List<PackageLease>,
     readMessages: suspend () -> List<UIMessage>,
-): List<Tool> = leases.flatMap { lease ->
+): List<Tool> = toolDefinitions(ExecutionBinding(leases), readMessages)
+
+fun PluginHost.toolDefinitions(
+    binding: ExecutionBinding,
+    readMessages: suspend () -> List<UIMessage>,
+): List<Tool> = binding.dependencies.flatMap { lease ->
     val installed = requireNotNull(state.value.packages[lease.packageHash]) { "Pinned plugin package is unavailable" }
     require(installed.manifest.id == lease.pluginId)
     installed.manifest.tools.map { declaration ->
@@ -47,7 +53,7 @@ fun PluginHost.toolDefinitions(
         ))
         val execute: suspend (kotlinx.serialization.json.JsonElement) -> ToolExecutionResult = { input ->
             dev.rikkahub.plugins.core.PluginToolSchema.validate(declaration.parameters, input)
-            withInstance(lease) { instance ->
+            withInstance(lease, binding) { instance ->
                 val result = PluginContract.toolResult(instance.invoke("tool", declaration.id, input) {
                     PluginContract.json.encodeToJsonElement(readMessages().map {
                         PluginContextMessage(it.id.toString(), it.role.name.lowercase(), it.toText())
@@ -72,7 +78,7 @@ fun PluginHost.toolDefinitions(
             needsApproval = { declaration.needsApproval },
             executionVersion = PluginContract.json.encodeToString(lease),
             validateExecution = {
-                if (authorized(lease, installed.manifest.capabilities)) null else "Plugin permission was revoked"
+                if (authorizedPackages(binding.dependencies)) null else "Owning plugin permission was revoked"
             },
             presentation = presentation,
             executeDetailed = execute,

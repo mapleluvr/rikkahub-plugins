@@ -4,7 +4,8 @@ import { resolve, isAbsolute } from 'node:path';
 
 export function git(cwd, args, { binary = false, input } = {}) {
   try {
-    const result = execFileSync('git', ['-C', cwd, ...args], {
+    // Release checks must observe the working tree, not a stale or misconfigured monitor cache.
+    const result = execFileSync('git', ['-c', 'core.fsmonitor=false', '-C', cwd, ...args], {
       encoding: binary ? undefined : 'utf8', input,
       maxBuffer: 64 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },

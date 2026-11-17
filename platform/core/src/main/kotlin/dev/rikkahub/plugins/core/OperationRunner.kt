@@ -13,6 +13,7 @@ data class OperationContext(
     val capabilities: Set<String>,
     val beforeEffect: suspend () -> Unit = {},
     val beforeModelRequest: suspend () -> Unit = beforeEffect,
+    val executionBinding: ExecutionBinding = ExecutionBinding(listOfNotNull(call.caller, call.handler)),
 )
 
 data class OperationDefinition(
@@ -38,6 +39,7 @@ class OperationRunner(definitions: List<OperationDefinition>) {
         timeoutMillis: Long = 30_000,
         chargeModelAttempt: suspend () -> Unit = {},
         admitEffect: suspend () -> Unit = {},
+        executionBinding: ExecutionBinding = ExecutionBinding(listOfNotNull(call.caller, call.handler)),
         validate: suspend (OperationCall) -> Unit
     ): OperationResult {
         require(call.id.isNotBlank() && attemptId.isNotBlank() && timeoutMillis > 0)
@@ -68,6 +70,7 @@ class OperationRunner(definitions: List<OperationDefinition>) {
                     currentCoroutineContext().ensureActive()
                     validate(call)
                 },
+                executionBinding = executionBinding,
             ))
             currentCoroutineContext().ensureActive()
             validate(call)

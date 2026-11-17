@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.plugins
 
+import dev.rikkahub.plugins.core.ModelAttemptLedger
 import dev.rikkahub.plugins.core.OperationLedger
 import dev.rikkahub.plugins.core.RunControl
 import dev.rikkahub.plugins.protocol.*
@@ -41,7 +42,8 @@ fun Conversation.recoverPluginExecution(): Conversation {
     }
     val recovered = OperationLedger.recover(ledger).let { records ->
         val messages = messageNodes.flatMap { it.messages }.associateBy { it.id.toString() }
-        records.copy(runs = records.runs.mapValues { (_, run) ->
+        records.copy(runs = records.runs.mapValues { (_, original) ->
+            val run = ModelAttemptLedger.recover(original)
             val unboundPending = run.inputIds.mapNotNull(messages::get).any { message ->
                 message.getTools().any { tool ->
                     val request = tool.approvalId?.let(run.approvalRequests::get)
@@ -55,6 +57,7 @@ fun Conversation.recoverPluginExecution(): Conversation {
             val reason = when {
                 missingHistory -> MISSING_RUN_HISTORY_GATE
                 unboundPending -> "host.approval-publication-incomplete"
+                ModelAttemptLedger.needsReconciliation(run) -> "host.recovery"
                 else -> null
             }
             if (run.state.status == RunStatus.ACTIVE && reason != null) {

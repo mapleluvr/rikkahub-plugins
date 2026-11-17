@@ -1,5 +1,7 @@
 package me.rerere.rikkahub.plugins
 
+import dev.rikkahub.plugins.core.ExecutionAuthorizationRevoked
+import dev.rikkahub.plugins.core.ExecutionBinding
 import dev.rikkahub.plugins.core.OperationContext
 import dev.rikkahub.plugins.core.OperationDefinition
 import dev.rikkahub.plugins.core.OperationRunner
@@ -157,6 +159,7 @@ class SessionOperationDispatcher(
                 } != false)
         ) { "Operation is disabled or unauthorized" }
         val snapshot = session.state.value
+        val owningLeases = call.run?.let { snapshot.executionLedger().runs.getValue(it.runId).pluginLeases }.orEmpty()
         require(call.target.conversationId == snapshot.id.toString())
         snapshot.executionLedger().operations[call.id]?.let { prior ->
             require(prior.call == call) { "Command identity reused" }
@@ -198,6 +201,12 @@ class SessionOperationDispatcher(
                     "Operation authorization was revoked"
                 )
                 validateRunPackages(current, call)
+                call.run?.let { ref ->
+                    requireOperationAdmission(
+                        current.executionLedger().runs.getValue(ref.runId).pluginLeases == owningLeases,
+                        "Owning execution binding changed",
+                    )
+                }
                 val view = try {
                     current.forOperationFrame(call.frame)
                 } catch (changed: IllegalArgumentException) {
@@ -222,6 +231,14 @@ class SessionOperationDispatcher(
                     validate(session.state.value)
                     session.state.value.requireOperationEffectAllowed(call)
                 },
+                executionBinding = ExecutionBinding(
+                    (owningLeases + listOfNotNull(call.caller, call.handler)).distinct(),
+                    validate = {
+                        val current = session.state.value
+                        validate(current)
+                        current.requireOperationEffectAllowed(call)
+                    },
+                ),
             ) {
                 validate(session.state.value)
             }
@@ -236,17 +253,22 @@ class SessionOperationDispatcher(
             }
             return result
         } catch (error: Throwable) {
+            val failure = if (error is ExecutionAuthorizationRevoked) {
+                OperationWaiting("Owning plugin execution authorization is unavailable").also { it.addSuppressed(error) }
+            } else {
+                error
+            }
             withContext(NonCancellable) {
                 runCatching {
                     markUnavailablePackages(session, call)
-                    if (error is OperationAdmissionDenied) {
-                        store.refusedBeforeEffect(call.id, error is OperationWaiting)
+                    if (failure is OperationAdmissionDenied) {
+                        store.refusedBeforeEffect(call.id, failure is OperationWaiting)
                     } else {
                         store.cancel(call.id)
                     }
-                }.exceptionOrNull()?.let(error::addSuppressed)
+                }.exceptionOrNull()?.let(failure::addSuppressed)
             }
-            throw error
+            throw failure
         }
     }
 }

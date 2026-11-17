@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.plugins
 
+import dev.rikkahub.plugins.protocol.ModelAttemptPhase
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
@@ -50,11 +51,23 @@ class PersistedExecutionBoundaryTest {
                 dev.rikkahub.plugins.protocol.RunStatus.ACTIVE
         }.distinct()
         assertTrue(cuts.size >= 4)
+        assertTrue("Exercise a reservation before final dispatch", cuts.any {
+            it.executionLedger().runs.values.single().modelAttempt?.phase == ModelAttemptPhase.RESERVED
+        })
+        assertTrue("Exercise an unconfirmed dispatch intent too", cuts.any {
+            it.executionLedger().runs.values.single().modelAttempt?.phase == ModelAttemptPhase.DISPATCH_INTENT
+        })
         for (cut in cuts) {
             val persistedTools = cut.currentMessages.last().getTools()
             val checkpoint = cut.executionLedger().runs.getValue(run.ref.runId)
-            val unknown = persistedTools.any { it.startedAt != null && !it.isExecuted } ||
-                checkpoint.state.stepsUsed > checkpoint.nextStep
+            val attempt = checkpoint.modelAttempt
+            val unknownModel = if (attempt == null) {
+                checkpoint.state.stepsUsed > checkpoint.nextStep // Conservative legacy checkpoint.
+            } else {
+                attempt.step >= checkpoint.nextStep &&
+                    (attempt.phase == ModelAttemptPhase.DISPATCH_INTENT || attempt.priorDispatchUnconfirmed)
+            }
+            val unknown = persistedTools.any { it.startedAt != null && !it.isExecuted } || unknownModel
             val restored = open(cut, FakeConversationStore(cut))
             val resumed = controller(restored)
             val nextProvider = ProviderProbe(offerTools = false)
