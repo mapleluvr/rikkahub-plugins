@@ -32,4 +32,25 @@
     <string name="plugin_host_source_changed">此操作执行后，原消息已有修改。</string>
     <string name="plugin_host_verify_result">请先查看执行记录并核对外部结果，再发起新操作。此尝试不会自动重试。</string>
     <string name="plugin_host_receipt_details">查看执行记录</string>
+    <string name="plugin_host_github">从 GitHub 安装</string>
+    <string name="plugin_host_repository">仓库或 Release 地址</string>
+    <string name="plugin_host_prerelease">包含预发布版本</string>
+    <string name="plugin_host_find_releases">查找兼容版本</string>
+    <string name="plugin_host_downloading">正在检查与下载…</string>
+    <string name="plugin_host_scan_count">已检查 %1$d 个 Release</string>
+    <string name="plugin_host_scan_truncated">已达到扫描上限，更早的版本中仍可能有兼容包。</string>
+    <string name="plugin_host_no_release">已检查的 Release 中没有兼容插件包。</string>
+    <string name="plugin_host_signature">签名密钥指纹：%1$s</string>
+    <string name="plugin_host_unsigned">未签名包</string>
+    <string name="plugin_host_download">下载并查看权限</string>
+    <string name="plugin_host_credentials">私有仓库凭据</string>
+    <string name="plugin_host_token">GitHub token（仅供宿主使用）</string>
+    <string name="plugin_host_save_token">保存凭据（留空则清除）</string>
+    <string name="plugin_host_token_saved">凭据已保存在本机。</string>
+    <string name="plugin_host_check_updates">选择更新来源</string>
+    <string name="plugin_host_use_version">采用已安装版本 %1$s</string>
+    <string name="plugin_host_local">本地包</string>
+    <string name="plugin_host_rollback">允许此次回滚；保留历史最高版本记录。</string>
+    <string name="plugin_host_source_change">确认更换此插件的仓库来源或签名身份。</string>
+    <string name="plugin_host_adopt">在此会话采用当前插件版本</string>
 </resources>

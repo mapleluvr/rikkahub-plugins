@@ -18,20 +18,12 @@ object PluginContract {
     val features = setOf("operations.v1", "tools.v1", "ui.native.v1", "ui.overlay.app.v1")
     private val localId = Regex("[a-z][a-z0-9_]{0,39}")
     private val pluginId = Regex("[a-z][a-z0-9]*(\\.[a-z][a-z0-9_-]*)+")
-    private val version =
-        Regex(
-            "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?"
-        )
 
     fun manifest(text: String): PluginManifest {
         require(text.length <= 64 * 1024) { "Manifest exceeds size limit" }
         val value = json.decodeFromString<PluginManifest>(text)
         require(value.id.length <= 120 && pluginId.matches(value.id)) { "Invalid plugin ID" }
-        require(value.version.length <= 80 && version.matches(value.version)) { "Invalid plugin version" }
-        val prerelease = value.version.substringBefore('+').substringAfter('-', "")
-        require(prerelease.split('.').none { it.length > 1 && it.all(Char::isDigit) && it.startsWith('0') }) {
-            "Noncanonical prerelease version"
-        }
+        PluginVersion.parse(value.version)
         require(value.name.isNotBlank() && value.name.length <= 120)
         require(value.apiVersion == "1" && value.runtime == "quickjs-es2020") { "Unsupported plugin runtime/API" }
         require(capabilities.containsAll(value.capabilities)) { "Unsupported capability" }

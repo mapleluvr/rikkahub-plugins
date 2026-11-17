@@ -8,6 +8,9 @@ import dev.rikkahub.plugins.core.VerifiedPluginPackage
 import dev.rikkahub.plugins.protocol.InstalledPlugin
 import dev.rikkahub.plugins.protocol.PackageLease
 import dev.rikkahub.plugins.protocol.PluginCatalogState
+import dev.rikkahub.plugins.protocol.PluginReleaseOrigin
+import dev.rikkahub.plugins.core.PluginReleaseCandidate
+import dev.rikkahub.plugins.core.PluginReleaseContract
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
@@ -32,6 +35,7 @@ class PluginHost private constructor(
         internal val owner: PluginHost,
         val pkg: VerifiedPluginPackage,
         val revision: Long,
+        val origin: PluginReleaseOrigin? = null,
     )
 
     private val lifecycle = Mutex()
@@ -61,14 +65,27 @@ class PluginHost private constructor(
 
     suspend fun prepareInstalled(hash: String): Candidate {
         val bytes = withContext(Dispatchers.IO) { packages.readArchive(hash) }
-        return prepare(bytes, hash)
+        val prepared = prepare(bytes, hash)
+        val origin = state.value.packages[hash]?.origin
+        return Candidate(this, prepared.pkg, prepared.revision, origin)
     }
 
-    suspend fun activate(candidate: Candidate, granted: Set<String>, source: String = "local"): InstalledPlugin =
-        lifecycle.withLock {
-            check(!closed && candidate.owner === this) { "Candidate belongs to an expired host" }
-            catalog.activate(candidate.pkg, granted, candidate.revision, source)
-        }
+    suspend fun prepareRelease(bytes: ByteArray, selected: PluginReleaseCandidate): Candidate {
+        PluginReleaseContract.verifyPackage(selected.entry, bytes)
+        val prepared = prepare(bytes, selected.entry.sha256)
+        return Candidate(this, prepared.pkg, prepared.revision, selected.origin)
+    }
+
+    suspend fun activate(
+        candidate: Candidate,
+        granted: Set<String>,
+        source: String = candidate.origin?.let { "github:" + it.repository } ?: "local",
+        allowRollback: Boolean = false,
+        allowSourceChange: Boolean = false,
+    ): InstalledPlugin = lifecycle.withLock {
+        check(!closed && candidate.owner === this) { "Candidate belongs to an expired host" }
+        catalog.activate(candidate.pkg, granted, candidate.revision, source, candidate.origin, allowRollback, allowSourceChange)
+    }
 
     /** Commit revocation first. All retained versions become unauthorized before engine shutdown begins. */
     suspend fun disable(pluginId: String) = withContext(NonCancellable) {

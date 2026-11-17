@@ -55,7 +55,7 @@ class PackagedToolServiceTest {
         val originalSettings = settings.awaitLoaded()
         val oldProvider = providers.getProvider("openai")
         val bytes = InstrumentationRegistry.getInstrumentation().context.assets
-            .open("plugins/review-report.rikkaplug").use { it.readBytes() }
+            .open("plugins/review-report.rikkaplug").use { it.readBytes() }.let(::isolatedFixture)
         val candidate = host.prepare(bytes)
         val id = candidate.pkg.manifest.id
         host.disable(id)
@@ -68,7 +68,7 @@ class PackagedToolServiceTest {
         val requests = CopyOnWriteArrayList<String>()
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             requests += Buffer().also { chain.request().body!!.writeTo(it) }.readUtf8()
-            val message = if (requests.size == 1) {
+            val message = if (requests.size % 2 == 1) {
                 """{"role":"assistant","content":null,"tool_calls":[{"id":"review","type":"function","function":{"name":"$toolName","arguments":"{}"}}]}"""
             } else {
                 """{"role":"assistant","content":"done"}"""
@@ -143,6 +143,24 @@ class PackagedToolServiceTest {
                 assertFalse(requests[1].contains("\"todos\""))
                 service.handleToolApproval(initial.id, pending.approvalId!!, true)
                 assertEquals(2, requests.size)
+                // A completed conversation remains pinned until the user adopts the installed update.
+                for ((adopt, expected) in listOf(false to installed, true to latest)) {
+                    if (adopt) service.adoptCurrentPlugins(initial.id)
+                    service.regenerateAtMessage(initial.id, user.id)
+                    withTimeout(20_000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
+                    val awaiting = repository.getConversationById(initial.id)!!
+                    val nextTool = awaiting.currentMessages.last().getTools().single()
+                    assertEquals(expected.lease.packageHash,
+                        nextTool.details!!.getValue("plugin").jsonObject.getValue("packageHash").jsonPrimitive.content)
+                    assertTrue(runCatching { service.adoptCurrentPlugins(initial.id) }.isFailure)
+                    service.handleToolApproval(initial.id, nextTool.approvalId!!, true)
+                    withTimeout(20_000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
+                    val completed = repository.getConversationById(initial.id)!!
+                    val output = completed.currentMessages.last().getTools().single().output.toString()
+                    assertEquals(adopt, output.contains("UPDATED"))
+                    assertEquals(expected.lease.packageHash, completed.packageSelection()!!.packages[id])
+                }
+                assertEquals(6, requests.size)
             }
         } finally {
             host.disable(id)
@@ -155,19 +173,36 @@ class PackagedToolServiceTest {
         }
     }
 
-    private fun changedVersion(bytes: ByteArray): ByteArray {
+    // Distinct package IDs keep each device run independent of retained versions from earlier runs.
+    private fun isolatedFixture(bytes: ByteArray): ByteArray {
+        val suffix = ".test" + Uuid.random().toString().replace("-", "")
+        return rewrite(bytes) { name, original ->
+            if (name == "manifest.json") {
+                val manifest = Json.parseToJsonElement(original.toString(Charsets.UTF_8)).jsonObject
+                kotlinx.serialization.json.JsonObject(manifest + ("id" to
+                    kotlinx.serialization.json.JsonPrimitive(manifest.getValue("id").jsonPrimitive.content + suffix)))
+                    .toString().toByteArray()
+            } else original
+        }
+    }
+
+    private fun changedVersion(bytes: ByteArray): ByteArray = rewrite(bytes) { name, original ->
+        when (name) {
+            "manifest.json" -> original.toString(Charsets.UTF_8).replace("0.1.0", "0.2.0").toByteArray()
+            "main.js" -> original.toString(Charsets.UTF_8).replace("已审阅", "UPDATED").toByteArray()
+            else -> original
+        }
+    }
+
+    private fun rewrite(bytes: ByteArray, transform: (String, ByteArray) -> ByteArray): ByteArray {
         val output = ByteArrayOutputStream()
         ZipOutputStream(output).use { target ->
             ZipInputStream(ByteArrayInputStream(bytes)).use { source ->
                 while (true) {
                     val entry = source.nextEntry ?: break
                     val original = source.readBytes()
-                    val data = when (entry.name) {
-                        "manifest.json" -> original.toString(Charsets.UTF_8).replace("0.1.0", "0.2.0").toByteArray()
-                        "main.js" -> original.toString(Charsets.UTF_8).replace("已审阅", "UPDATED").toByteArray()
-                        else -> original
-                    }
-                    target.putNextEntry(ZipEntry(entry.name))
+                    val data = transform(entry.name, original)
+                    target.putNextEntry(ZipEntry(entry.name).apply { time = 0 })
                     target.write(data)
                     target.closeEntry()
                 }

@@ -2,6 +2,7 @@ package me.rerere.rikkahub.plugins
 
 import android.content.Context
 import dev.rikkahub.plugins.runtime.PluginHost
+import dev.rikkahub.plugins.core.GitHubPluginResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
@@ -17,6 +18,8 @@ sealed interface PluginHostLoad {
 
 /** Application-owned initialization survives page disposal; failed package loading leaves ordinary chat usable. */
 class RikkaPluginManager(context: Context, scope: CoroutineScope) {
+    val githubCredentials = PluginGitHubCredentials(context)
+    val github = GitHubPluginResolver(GitHubPluginHttp(githubCredentials::read))
     private val mutable = MutableStateFlow<PluginHostLoad>(PluginHostLoad.Loading)
     val state = mutable.asStateFlow()
     private val initialization = scope.async(start = CoroutineStart.LAZY) {

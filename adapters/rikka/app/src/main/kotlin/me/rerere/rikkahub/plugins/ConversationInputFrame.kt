@@ -54,7 +54,7 @@ fun Conversation.restoreBrowsingSelection(previous: Conversation): Conversation 
     })
 }
 
-/** Fork copies historical display ownership only, never a run, permit or executable operation receipt. */
+/** Fork inherits version configuration and display ownership, never a run, permit or executable receipt. */
 fun Conversation.inheritPluginHistory(source: Conversation): Conversation {
     val ids = messageNodes.flatMap { node -> node.messages.map { it.id.toString() } }.toSet()
     val sourceLineages = runCatching { source.executionLedger().messageLineages }.getOrDefault(emptyMap())
@@ -63,7 +63,8 @@ fun Conversation.inheritPluginHistory(source: Conversation): Conversation {
     val safe = copy(messageNodes = messageNodes.filter { node ->
         node.currentMessage.id.toString().let { it !in sourceLineages || it in inherited }
     })
-    return if (inherited.isEmpty()) safe else safe.withExecutionLedger(ExecutionLedger(messageLineages = inherited))
+    val history = if (inherited.isEmpty()) safe else safe.withExecutionLedger(ExecutionLedger(messageLineages = inherited))
+    return source.packageSelection()?.let(history::withPackageSelection) ?: history
 }
 
 fun Conversation.runInputMessages(runId: String): List<UIMessage> =

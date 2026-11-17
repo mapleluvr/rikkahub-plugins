@@ -1,11 +1,11 @@
 {
   "name": "@rikkahub/plugin-sdk",
   "version": "0.1.0",
-  "private": true,
+  "files": ["index.ts", "build.mjs", "release.mjs", "version.mjs", "entry.mjs", "publish.mjs", "create.mjs", "archive.mjs", "README.md"],
   "type": "module",
   "license": "AGPL-3.0-only",
-  "exports": "./index.ts",
-  "bin": { "rikkaplug": "./build.mjs" },
+  "exports": { ".": "./index.ts", "./build": "./build.mjs", "./archive": "./archive.mjs" },
+  "bin": { "rikkaplug": "./build.mjs", "rikkaplug-release": "./release.mjs", "rikkaplug-publish": "./publish.mjs", "rikkaplug-create": "./create.mjs" },
   "scripts": { "test": "node --test test/*.test.mjs" },
   "dependencies": { "esbuild": "0.27.7", "fflate": "0.8.2" }
 }

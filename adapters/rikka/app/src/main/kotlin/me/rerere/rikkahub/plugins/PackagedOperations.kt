@@ -5,7 +5,7 @@ import dev.rikkahub.plugins.protocol.PluginContextMessage
 import dev.rikkahub.plugins.runtime.PluginHost
 import kotlinx.serialization.json.encodeToJsonElement
 
-/** Every retained version is resolvable by its exact lease; UI chooses only the preferred versions. */
+/** Retained versions remain resolvable; session admission still checks the selected package and epoch. */
 fun PluginHost.operationDefinitions(): List<ConversationOperation> = state.value.packages.values
     .filter { it.enabled }
     .flatMap { installed ->
@@ -16,10 +16,13 @@ fun PluginHost.operationDefinitions(): List<ConversationOperation> = state.value
                 lease = installed.lease,
                 capabilities = installed.manifest.capabilities,
             ) { source, input ->
+                check(source.selectedPackage(installed.lease)) { "Conversation plugin version changed" }
                 val messages = source.currentMessages.map {
                     PluginContextMessage(it.id.toString(), it.role.name.lowercase(), it.toText())
                 }
-                PreparedConversationOperation(source.pluginSources(), execute = { execution ->
+                PreparedConversationOperation(source.pluginSources(), validateAdoption = { current ->
+                    requireOperationAdmission(current.selectedPackage(installed.lease), "Conversation plugin version changed")
+                }, execute = { execution ->
                     execution.beforeEffect()
                     withInstance(installed.lease) { instance ->
                         val result = instance.invoke("operation", declaration.id, input) {

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { build } from 'esbuild';
+import { parseVersion } from './version.mjs';
 import { zipSync } from 'fflate';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from './entry.mjs';
 
 const MAX_EXPANDED = 8 * 1024 * 1024;
 const MAX_ARCHIVE = 4 * 1024 * 1024;
@@ -31,7 +32,7 @@ export async function buildPackage(directory, source = 'src/index.ts') {
   if (manifestBytes.length > 64 * 1024) throw new Error('Manifest exceeds size limit');
   const manifest = JSON.parse(manifestBytes.toString('utf8'));
   if (!/^[a-z][a-z0-9]*(\.[a-z][a-z0-9_-]*)+$/.test(manifest.id ?? '')) throw new Error('Invalid plugin ID');
-  if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(manifest.version ?? '')) throw new Error('Invalid version');
+  parseVersion(manifest.version);
   const entry = manifest.entry ?? 'main.js';
   const resources = manifest.resources ?? [];
   const names = ['manifest.json', entry, ...resources];
@@ -83,6 +84,6 @@ async function main(args) {
   console.log(`${result.manifest.id}@${result.manifest.version} ${result.sha256}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMain(import.meta.url)) {
   main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });
 }

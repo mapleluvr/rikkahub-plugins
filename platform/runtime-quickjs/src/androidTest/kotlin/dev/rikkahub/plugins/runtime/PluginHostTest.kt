@@ -59,7 +59,7 @@ class PluginHostTest {
             assertTrue("Revocation must drain the retained old runtime", old.close())
             assertTrue("Revocation must drain the preferred runtime", latest.close())
             assertTrue(runCatching { old.invoke("operation", "report", JsonNull) }.isFailure)
-            val enabled = host.activate(host.prepare(archive("1.0.0")), grants)
+            val enabled = host.activate(host.prepare(archive("1.0.0")), grants, allowRollback = true)
             assertNotEquals(first.lease, enabled.lease)
             assertFalse(host.authorized(first.lease, grants))
             assertFalse(host.authorized(second.lease, grants))

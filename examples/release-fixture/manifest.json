@@ -1,0 +1,40 @@
+{
+  "id": "dev.rikka.releasefixture",
+  "name": "P5 安装验证",
+  "version": "0.1.0-p5.fixture.1",
+  "apiVersion": "1",
+  "entry": "main.js",
+  "capabilities": [
+    "context.read",
+    "artifacts.write",
+    "tools.register",
+    "ui.actions",
+    "ui.overlay.app"
+  ],
+  "operations": [
+    {
+      "id": "review",
+      "title": "生成审阅报告"
+    }
+  ],
+  "tools": [
+    {
+      "id": "review",
+      "title": "会话审阅",
+      "description": "生成消息数量和待办标记的本地审阅报告，不调用模型或修改上下文。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "needsApproval": true
+    }
+  ],
+  "panels": [
+    {
+      "id": "main",
+      "title": "会话审阅",
+      "overlay": true
+    }
+  ]
+}

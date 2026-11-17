@@ -32,4 +32,25 @@
     <string name="plugin_host_source_changed">The source has changed since this operation.</string>
     <string name="plugin_host_verify_result">Check the recorded attempt and any external result before starting new work. This attempt will not be retried automatically.</string>
     <string name="plugin_host_receipt_details">Receipt details</string>
+    <string name="plugin_host_github">Install from GitHub</string>
+    <string name="plugin_host_repository">Repository or Release URL</string>
+    <string name="plugin_host_prerelease">Include prerelease versions</string>
+    <string name="plugin_host_find_releases">Find compatible versions</string>
+    <string name="plugin_host_downloading">Checking and downloading…</string>
+    <string name="plugin_host_scan_count">Checked %1$d releases</string>
+    <string name="plugin_host_scan_truncated">Scan limit reached. Older compatible versions may exist.</string>
+    <string name="plugin_host_no_release">No compatible package in the checked releases.</string>
+    <string name="plugin_host_signature">Signing key fingerprint: %1$s</string>
+    <string name="plugin_host_unsigned">Unsigned package</string>
+    <string name="plugin_host_download">Download and review permissions</string>
+    <string name="plugin_host_credentials">Private repository credential</string>
+    <string name="plugin_host_token">GitHub token (host only)</string>
+    <string name="plugin_host_save_token">Save credential (empty clears it)</string>
+    <string name="plugin_host_token_saved">Credential saved on this device.</string>
+    <string name="plugin_host_check_updates">Select update source</string>
+    <string name="plugin_host_use_version">Use installed version %1$s</string>
+    <string name="plugin_host_local">Local package</string>
+    <string name="plugin_host_rollback">Allow this rollback; keep the highest recorded version.</string>
+    <string name="plugin_host_source_change">Confirm changing this plugin’s repository or signing identity.</string>
+    <string name="plugin_host_adopt">Use current plugin versions in this conversation</string>
 </resources>

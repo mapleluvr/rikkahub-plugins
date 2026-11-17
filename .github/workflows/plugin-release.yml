@@ -1,0 +1,136 @@
+name: Plugin package
+on:
+  workflow_call:
+    inputs:
+      host-repository:
+        type: string
+        default: mapleluvr/rikkahub-plugin-host
+      host-ref:
+        description: Exact reviewed host toolkit commit (40 hex characters)
+        type: string
+        required: true
+      plugin-directory:
+        type: string
+        default: .
+      release-tag:
+        description: v followed by the exact manifest version
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: false
+    secrets:
+      host-read-token:
+        description: Optional read-only token while the host toolkit repository is private
+        required: false
+      plugin-signing-key:
+        description: Optional P-256 private key PEM; configured in the release environment
+        required: false
+permissions: {}
+concurrency:
+  group: plugin-${{ github.repository }}-${{ inputs.release-tag }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Validate toolkit and release inputs
+        env:
+          HOST_REF: ${{ inputs.host-ref }}
+          TAG: ${{ inputs.release-tag }}
+          PUBLISH: ${{ inputs.publish }}
+        shell: bash
+        run: |
+          [[ "$HOST_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          if [[ "$PUBLISH" == true ]]; then
+            [[ "$GITHUB_REF" == "refs/tags/$TAG" ]] || exit 1
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: plugin
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.host-repository }}
+          ref: ${{ inputs.host-ref }}
+          token: ${{ secrets.host-read-token || github.token }}
+          path: toolkit
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.15.0
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '21.0.3+9'
+      - name: Install pinned dependencies and run plugin tests
+        env:
+          PLUGIN_DIRECTORY: ${{ inputs.plugin-directory }}
+        run: |
+          npm install --global pnpm@11.28.11
+          pnpm --dir toolkit install --frozen-lockfile
+          cd "plugin/$PLUGIN_DIRECTORY"
+          pnpm install --frozen-lockfile
+          pnpm test
+      - name: Build twice and verify with the real host engine
+        env:
+          PLUGIN_DIRECTORY: ${{ inputs.plugin-directory }}
+          RIKKA_RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          node toolkit/sdk/plugin/release.mjs build "plugin/$PLUGIN_DIRECTORY" release
+          node toolkit/sdk/plugin/release.mjs build "plugin/$PLUGIN_DIRECTORY" repeat
+          diff --recursive release repeat
+          bash toolkit/verification/quickjs-cli/gradlew -p toolkit/verification/quickjs-cli test installDist
+          toolkit/verification/quickjs-cli/build/install/rikka-plugin-contract/bin/rikka-plugin-contract "$PWD/release"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: plugin-release
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    if: inputs.publish && startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: plugin-release
+    permissions:
+      contents: write
+    steps:
+      # No plugin checkout, package scripts or plugin evaluation in this privileged job.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.host-repository }}
+          ref: ${{ inputs.host-ref }}
+          token: ${{ secrets.host-read-token || github.token }}
+          path: toolkit
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.15.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: plugin-release
+          path: release
+      - name: Install trusted verifier and check artifact
+        run: |
+          npm install --global pnpm@11.28.11
+          pnpm --dir toolkit install --frozen-lockfile --ignore-scripts
+          node toolkit/sdk/plugin/release.mjs verify release
+      - name: Sign index if configured
+        env:
+          SIGNING_KEY: ${{ secrets.plugin-signing-key }}
+          RIKKA_SIGNING_KEY_FILE: ${{ runner.temp }}/plugin-signing.pem
+        run: |
+          if [[ -n "$SIGNING_KEY" ]]; then
+            trap 'rm -f "$RIKKA_SIGNING_KEY_FILE"' EXIT
+            node -e 'require("node:fs").writeFileSync(process.env.RIKKA_SIGNING_KEY_FILE, process.env.SIGNING_KEY, {mode: 0o600})'
+            unset SIGNING_KEY
+            node toolkit/sdk/plugin/release.mjs sign release
+          fi
+      - name: Publish only after uploaded bytes are read back and verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RIKKA_RELEASE_TAG: ${{ inputs.release-tag }}
+        run: node toolkit/sdk/plugin/publish.mjs release

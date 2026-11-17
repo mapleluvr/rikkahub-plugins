@@ -42,7 +42,7 @@ class PluginCatalogTest {
         val second = catalog.activate(next, next.manifest.capabilities, 1)
         assertTrue(catalog.authorized(first.lease, old.manifest.capabilities))
         assertTrue(catalog.authorized(second.lease, next.manifest.capabilities))
-        val selectedOld = catalog.activate(old, old.manifest.capabilities, 2)
+        val selectedOld = catalog.activate(old, old.manifest.capabilities, 2, allowRollback = true)
         assertEquals(
             "Selecting an already retained package must keep live callers' lease",
             first.lease,
@@ -52,7 +52,7 @@ class PluginCatalogTest {
         catalog.disable(old.manifest.id)
         assertFalse(catalog.authorized(first.lease, old.manifest.capabilities))
         assertFalse(catalog.authorized(second.lease, next.manifest.capabilities))
-        val enabled = catalog.activate(old, old.manifest.capabilities, catalog.state.value.revision)
+        val enabled = catalog.activate(old, old.manifest.capabilities, catalog.state.value.revision, allowRollback = true)
         assertNotEquals(first.lease, enabled.lease)
         assertFalse(catalog.authorized(first.lease, old.manifest.capabilities))
         assertTrue(catalog.authorized(enabled.lease, old.manifest.capabilities))
@@ -107,6 +107,39 @@ class PluginCatalogTest {
         val next = pkg("1.1.0")
         assertTrue(runCatching { catalog.activate(next, emptySet(), 1) }.isFailure)
         assertEquals(setOf(old.hash), catalog.state.value.packages.keys)
+    }
+
+    @Test fun rollbackNeverLowersHighWaterAndPublisherChangesRequireSeparateConsent() = runBlocking {
+        var disk = PluginCatalogState()
+        val catalog = PluginCatalog(disk) { disk = it }
+        val origin = dev.rikkahub.plugins.protocol.PluginReleaseOrigin(7, "owner/repo", 10, "v2.0.0", 11, "a".repeat(64))
+        val latest = pkg("2.0.0")
+        catalog.activate(latest, latest.manifest.capabilities, 0, origin = origin)
+        val old = pkg("1.0.0")
+        assertTrue(runCatching { catalog.activate(old, old.manifest.capabilities, disk.revision, origin = origin) }.isFailure)
+        catalog.activate(old, old.manifest.capabilities, disk.revision, origin = origin, allowRollback = true)
+        assertEquals("2.0.0", disk.updatePolicies.getValue(latest.manifest.id).highWaterVersion)
+        catalog.disable(latest.manifest.id)
+        val restored = PluginCatalog(disk) { disk = it }
+        val next = pkg("2.1.0")
+        for (changed in listOf(null, origin.copy(repositoryId = 8), origin.copy(publisherKey = null))) {
+            assertTrue(runCatching { restored.activate(next, next.manifest.capabilities, disk.revision, origin = changed) }.isFailure)
+        }
+        restored.activate(next, next.manifest.capabilities, disk.revision, origin = origin.copy(repository = "new/repo"))
+        assertEquals("new/repo", disk.updatePolicies.getValue(next.manifest.id).repository)
+    }
+
+    @Test fun legacyCatalogConsentUsesTheSamePolicyAsActivation() = runBlocking {
+        val first = PluginCatalog(PluginCatalogState()) {}
+        val old = pkg("2.0.0")
+        first.activate(old, old.manifest.capabilities, 0)
+        val legacy = first.state.value.copy(updatePolicies = emptyMap())
+        assertEquals("2.0.0", legacy.updatePolicy(old.manifest.id)?.highWaterVersion)
+        val restored = PluginCatalog(legacy) {}
+        val origin = dev.rikkahub.plugins.protocol.PluginReleaseOrigin(7, "owner/repo", 10, "v2.0.0", 11)
+        assertTrue(runCatching { restored.activate(old, old.manifest.capabilities, legacy.revision, origin = origin) }.isFailure)
+        restored.activate(old, old.manifest.capabilities, legacy.revision, origin = origin, allowSourceChange = true)
+        assertEquals(7L, restored.state.value.updatePolicy(old.manifest.id)?.repositoryId)
     }
 
     private fun pkg(version: String, source: String = "source") = ByteArrayOutputStream().let { output ->

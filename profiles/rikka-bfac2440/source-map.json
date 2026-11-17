@@ -396,6 +396,66 @@
     {
       "from": "adapters/rikka/app/src/androidTest/assets/plugins/review-report.rikkaplug.sha256",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/assets/plugins/review-report.rikkaplug.sha256"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginVersion.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginVersion.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginReleaseContract.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/PluginReleaseContract.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/GitHubPluginSource.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/GitHubPluginSource.kt"
+    },
+    {
+      "from": "platform/core/src/main/kotlin/dev/rikkahub/plugins/core/GitHubPluginResolver.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/main/kotlin/dev/rikkahub/plugins/core/GitHubPluginResolver.kt"
+    },
+    {
+      "from": "platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/PluginRelease.kt",
+      "to": "vendor/rikka-plugin-host/platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/PluginRelease.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/PluginVersionTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/PluginVersionTest.kt"
+    },
+    {
+      "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/GitHubPluginResolverTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/GitHubPluginResolverTest.kt"
+    },
+    {
+      "from": "platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/PluginUpdatePolicy.kt",
+      "to": "vendor/rikka-plugin-host/platform/protocol/src/main/kotlin/dev/rikkahub/plugins/protocol/PluginUpdatePolicy.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/GitHubPluginHttp.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/GitHubPluginHttp.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/PluginGitHubCredentials.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/PluginGitHubCredentials.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginGitHubInstaller.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/ui/PluginGitHubInstaller.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/GitHubPluginHttpTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/GitHubPluginHttpTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/SessionPackageSelection.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/plugins/SessionPackageSelection.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionPackageSelectionTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/plugins/SessionPackageSelectionTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/GitHubPluginInstallTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/GitHubPluginInstallTest.kt"
     }
   ]
 }

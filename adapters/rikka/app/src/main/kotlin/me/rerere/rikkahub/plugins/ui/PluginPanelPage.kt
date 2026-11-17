@@ -33,6 +33,7 @@ import kotlinx.serialization.json.JsonNull
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.plugins.executionLedger
+import me.rerere.rikkahub.plugins.selectedPackage
 import me.rerere.rikkahub.plugins.operationCall
 import me.rerere.rikkahub.plugins.operationDefinitions
 import me.rerere.rikkahub.plugins.sourceStamp
@@ -77,7 +78,8 @@ private fun PluginPanel(
 ) {
     val catalog by host.state.collectAsStateWithLifecycle()
     val installed = catalog.packages[lease.packageHash]
-    val valid = installed?.let { host.authorized(lease, it.manifest.capabilities) } == true
+    val valid = installed?.let { host.authorized(lease, it.manifest.capabilities) } == true &&
+        conversation?.selectedPackage(lease) != false
     val panel = installed?.manifest?.panels?.find { it.id == panelId }
     var tree by remember(lease, panelId) { mutableStateOf<PluginUiNode?>(null) }
     var error by remember(lease, panelId) { mutableStateOf<String?>(null) }
