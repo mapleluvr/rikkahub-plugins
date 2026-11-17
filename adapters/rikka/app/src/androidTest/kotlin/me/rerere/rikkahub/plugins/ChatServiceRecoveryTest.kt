@@ -109,7 +109,10 @@ class ChatServiceRecoveryTest {
             service.stopGeneration(initial.id)
             service.sendMessage(initial.id, listOf(UIMessagePart.Text("after stop")), answer = false)
             withTimeout(10000) {
-                service.getConversationFlow(initial.id).first { it.currentMessages.lastOrNull()?.toText() == "after stop" }
+                service.getConversationFlow(initial.id).first {
+                    it.currentMessages.lastOrNull()?.toText() ==
+                        "after stop"
+                }
                 service.getGenerationJobStateFlow(initial.id).first { it == null }
             }
             assertEquals("after stop", repo.getConversationById(initial.id)!!.currentMessages.last().toText())

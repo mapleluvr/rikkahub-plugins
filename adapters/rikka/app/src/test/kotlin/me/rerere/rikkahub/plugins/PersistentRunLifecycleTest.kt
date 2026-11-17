@@ -132,8 +132,10 @@ class PersistentRunLifecycleTest {
             val session = ConversationSession(source.id, source, this, store, {})
             session.initialize({ source })
             val recovered = session.state.value.executionLedger().runs.getValue(ref.runId)
-            assertTrue("Missing input must have a durable reconciliation reason",
-                "host.history-missing" in recovered.state.gates)
+            assertTrue(
+                "Missing input must have a durable reconciliation reason",
+                "host.history-missing" in recovered.state.gates
+            )
             assertEquals(checkpoint.inputIds, recovered.inputIds)
             assertEquals(checkpoint.messageId, recovered.messageId)
             assertTrue("user" in recovered.state.gates)

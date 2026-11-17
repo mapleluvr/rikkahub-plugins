@@ -113,7 +113,10 @@ class ApprovalServicePublicationTest {
             val waitingInMemory = service.getConversation(initial.id)
             for (owned in listOf(user, reply)) {
                 val rejected = runCatching { service.deleteMessage(initial.id, owned.id) }.exceptionOrNull()
-                assertTrue("Deleting a message owned by the waiting run must be rejected", rejected is RunHistoryConflict)
+                assertTrue(
+                    "Deleting a message owned by the waiting run must be rejected",
+                    rejected is RunHistoryConflict
+                )
                 assertEquals(waiting, repository.getConversationById(initial.id))
                 assertEquals(waitingInMemory, service.getConversation(initial.id))
             }
