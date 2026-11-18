@@ -1,4 +1,4 @@
-From 3f39f6c06eed9dcb49675b54523ea05ef234be7e Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Tue, 17 Nov 2026 06:33:38 +0800
 Subject: [PATCH] fix(host): serialize recovery, side-effect admission and
@@ -242,10 +242,10 @@ index 595d37c1a0f6c78f3d540908bb2e01315f339409..a2c8e87c1f70bbbd38c8cd70c00fce0f
  )
  
 diff --git a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
-index 4b6e25b4ada4f7cb175a95d4f6b3f3e571005c78..d5cdd0859e03d7d0e1dc20e230dcbc3f3ee92201 100644
+index 461f8b4669882c3bfc4be047556b5a9585c4e1ed..4aac7329cde25eaa1b0500a62afaccde8cb06bb8 100644
 --- a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
 +++ b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
-@@ -286,6 +286,7 @@ class RouteActivity : ComponentActivity() {
+@@ -287,6 +287,7 @@ class RouteActivity : ComponentActivity() {
                      is AppEvent.OpenUsageAccessSettings -> this@RouteActivity.openUsageAccessSettings()
                      is AppEvent.ChatGenerationUpdate -> Unit // 由 ChatNotificationManager 消费
                      is AppEvent.ChatGenerationEnded -> Unit // 由 ChatNotificationManager 消费
@@ -920,10 +920,10 @@ index 150ffa6d22079b3161a13b1727206832112fdbe7..0f1150686c733c4464534b1e26e10443
  
      val isInUse: Boolean
 diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt
-index ff873f7037c53f290047a450add0e3d746f94371..f22bf7b53e212ecb92a2c1b4388dbc8076d0ca7f 100644
+index 4c4b0cffef6b79c6415e236e4ba69a1cfe9535ea..a48f102264ad9a3999d5d138d7245192ba311e11 100644
 --- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt
 +++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatList.kt
-@@ -124,7 +124,7 @@ fun ChatList(
+@@ -126,7 +126,7 @@ fun ChatList(
                  progress = previewProgress,
                  scope = scope,
                  layoutDirection = layoutDirection,
@@ -932,16 +932,16 @@ index ff873f7037c53f290047a450add0e3d746f94371..f22bf7b53e212ecb92a2c1b4388dbc80
                  isPreviewMode = { currentPreviewMode },
                  onPreviewModeChange = { currentOnPreviewModeChange(it) },
              ),
-@@ -294,7 +294,7 @@ private fun ChatListNormal(
+@@ -296,7 +296,7 @@ private fun ChatListNormal(
              .flatMap { it.models }
              .associateBy { it.id }
      }
 -    val lastMessageIndex = conversation.messageNodes.lastIndex
 +    val lastMessageIndex = conversation.visibleMessageNodes.lastIndex
- 
-     Box(
-         modifier = Modifier
-@@ -307,8 +307,8 @@ private fun ChatListNormal(
+     // 流式输出时会频繁重组，只在相关配置变了才重新查找模型
+     val needsSetup = remember(settings.init, settings.providers, settings.chatModelId, settings.assistants, conversation.assistantId, conversation.config) {
+         !settings.init && settings.getChatModelOf(conversation) == null
+@@ -313,8 +313,8 @@ private fun ChatListNormal(
                      // println("is bottom = ${visibleItemsInfo.isAtBottom()}, scroll = ${state.isScrollInProgress}, can_scroll = ${state.canScrollForward}, loading = $loading")
                      if (!state.isScrollInProgress && loadingState) {
                          if (visibleItemsInfo.isAtBottom()) {
@@ -952,7 +952,7 @@ index ff873f7037c53f290047a450add0e3d746f94371..f22bf7b53e212ecb92a2c1b4388dbc80
                          }
                      }
                  }
-@@ -343,7 +343,7 @@ private fun ChatListNormal(
+@@ -349,7 +349,7 @@ private fun ChatListNormal(
                      .hazeSource(state = hazeState),
              ) {
              itemsIndexed(
@@ -961,7 +961,7 @@ index ff873f7037c53f290047a450add0e3d746f94371..f22bf7b53e212ecb92a2c1b4388dbc80
                  key = { index, item -> item.id },
              ) { index, node ->
                  Column {
-@@ -380,8 +380,8 @@ private fun ChatListNormal(
+@@ -386,8 +386,8 @@ private fun ChatListNormal(
                              onShare = {
                                  // 默认选中从第一条到这一条
                                  selectionState.start(
@@ -972,7 +972,7 @@ index ff873f7037c53f290047a450add0e3d746f94371..f22bf7b53e212ecb92a2c1b4388dbc80
                                  )
                              },
                              onUpdate = {
-@@ -463,10 +463,10 @@ private fun ChatListNormal(
+@@ -476,10 +476,10 @@ private fun ChatListNormal(
              // 完成选择
              ChatSelectionToolbar(
                  state = selectionState,
@@ -985,7 +985,7 @@ index ff873f7037c53f290047a450add0e3d746f94371..f22bf7b53e212ecb92a2c1b4388dbc80
                          showExportSheet = true
                      }
                  },
-@@ -483,7 +483,7 @@ private fun ChatListNormal(
+@@ -496,7 +496,7 @@ private fun ChatListNormal(
                      selectedItems.clear()
                  },
                  conversation = conversation,
@@ -995,10 +995,10 @@ index ff873f7037c53f290047a450add0e3d746f94371..f22bf7b53e212ecb92a2c1b4388dbc80
              )
  
 diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatListPreview.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatListPreview.kt
-index 5566dcfedcc6bba2239df52f1e4acf9fef491fa0..8efa0b616c9f60f3d4f38c5b2ac60a06aa4b2fbc 100644
+index 1a70a440d51ad2c9c3dc0a8f2315137d9564f649..c1c841b5b9c13ffbaf68a6830b0e9c4aa4260dd2 100644
 --- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatListPreview.kt
 +++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatListPreview.kt
-@@ -142,7 +142,7 @@ internal fun ChatListPreview(
+@@ -150,7 +150,7 @@ internal fun ChatListPreview(
  
      // 长对话里逐条做正则清洗很慢，放到后台算；没算完时为 null。
      // 生成中节点每个 chunk 都在变，conflate 掉中间状态，只算最新的

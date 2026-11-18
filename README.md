@@ -2,7 +2,7 @@
 
 RikkaHub 插件宿主维护仓库：固定上游源码、重放适配补丁、导入插件平台，构建独立发行版。
 
-P2/P3 已通过独立审查，P4/P5 的真实包、UI、GitHub 安装与发布工具正在最终验证；当前仅有开发 APK，尚无可安装的正式派生发行版。实施和验证状态见 [工作入口](docs/OVERVIEW.md)，工程约定见 [仓库设计](docs/state/plugin-patch-repository.md)。
+P2/P3 和 P4/P5 已通过独立审查。派生 APK 已通过签名校验和与官方 APK 并装验证，当前正在验证前版升级和上游跟随。详见 [实施状态](docs/implementation-status.md) 和 [仓库设计](docs/state/plugin-patch-repository.md)。
 
 ## 开发
 
@@ -12,7 +12,8 @@ P2/P3 已通过独立审查，P4/P5 的真实包、UI、GitHub 安装与发布�
 pnpm install --frozen-lockfile
 pnpm test
 node tools/hostctl/cli.mjs doctor
-node tools/hostctl/cli.mjs prepare --profile rikka-bfac2440 --source ../rikkahub --out .work/integration
+node tools/hostctl/cli.mjs observe-upstream --branch master
+node tools/hostctl/cli.mjs prepare --profile rikka-github --out .work/integration
 ```
 
 hostctl 接口随 P0 实现。固定的构建输入、命令与验证结果会记录在工作区和 docs/changes；未验证能力不计作阶段完成。

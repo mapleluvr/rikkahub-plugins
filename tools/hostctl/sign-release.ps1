@@ -5,7 +5,7 @@ param(
     [Parameter(Mandatory)][string]$OutputApk,
     [Parameter(Mandatory)][string]$BuildTools,
     [Parameter(Mandatory)][string]$Java,
-    [string]$Profile = 'rikka-bfac2440',
+    [string]$Profile = 'rikka-github',
     [string]$SigningDirectory = (Join-Path $HOME '.rikkahub-plugin-host/signing')
 )
 

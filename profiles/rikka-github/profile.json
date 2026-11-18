@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "status": "candidate",
+  "upstream": {
+    "url": "https://github.com/rikkahub/rikkahub.git",
+    "commit": "ce0e3607a8dc8a450abe5309e12d30f727a6c54a"
+  },
+  "series": "patches/rikka-github/series.json",
+  "toolchain": "profiles/rikka-github/toolchain.json",
+  "sourceMap": "profiles/rikka-github/source-map.json",
+  "product": "distribution/product.json"
+}

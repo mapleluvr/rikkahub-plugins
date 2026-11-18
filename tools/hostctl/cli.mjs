@@ -19,7 +19,7 @@ const { values, positionals } = parseArgs({
   },
 });
 const [command] = positionals;
-const options = { repo, profile: values.profile ?? 'rikka-bfac2440', ...values };
+const options = { repo, profile: values.profile ?? 'rikka-github', ...values };
 for (const key of ['source', 'out', 'expected', 'workspace']) {
   if (options[key]) options[key] = resolve(options[key]);
 }

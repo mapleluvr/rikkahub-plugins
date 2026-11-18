@@ -1,4 +1,4 @@
-From d485b924fa80fd28b8e2c1c53304418a81875621 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Host assembly <host-assembly@example.invalid>
 Date: Wed, 18 Nov 2026 20:34:50 +0800
 Subject: [PATCH] Use verified host APK release updates
@@ -11,9 +11,9 @@ Patch-Id: verified-host-apk-update
  .../rikkahub/ui/components/ui/UpdateCard.kt   | 215 +++++--------
  .../rikkahub/ui/pages/chat/ChatDrawer.kt      |   2 +-
  .../rerere/rikkahub/ui/pages/chat/ChatVM.kt   |   4 +-
- .../me/rerere/rikkahub/utils/UpdateChecker.kt | 284 +++++++-----------
+ .../me/rerere/rikkahub/utils/UpdateChecker.kt | 282 +++++++-----------
  .../java/me/rerere/rikkahub/utils/Version.kt  |  90 ++++++
- 8 files changed, 298 insertions(+), 310 deletions(-)
+ 8 files changed, 298 insertions(+), 308 deletions(-)
  create mode 100644 app/src/main/java/me/rerere/rikkahub/utils/Version.kt
 
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
@@ -362,10 +362,10 @@ index a808e41290d56ce947464f6fc564a404410da824..e050a2587f86ce0eb1515a4067244dda
                  settings.displaySetting.updateCheckDisabledUntilEpochMillis <= System.currentTimeMillis()
          }
 diff --git a/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt b/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt
-index 7776245263b81157ca041c9bbfc45c110d5c9fb9..691898230abd592b2d1553522f8fb146cf61502b 100644
+index 291268e15a90a71261d51b917ef5973ec064a0ef..691898230abd592b2d1553522f8fb146cf61502b 100644
 --- a/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt
 +++ b/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt
-@@ -1,195 +1,139 @@
+@@ -1,193 +1,139 @@
  package me.rerere.rikkahub.utils
  
 -import android.app.DownloadManager
@@ -507,8 +507,6 @@ index 7776245263b81157ca041c9bbfc45c110d5c9fb9..691898230abd592b2d1553522f8fb146
 -                setDescription("正在下载更新包...")
 -                // 下载完成后通知栏可见
 -                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
--                // 允许在移动网络和WiFi下下载
--                setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
 -                // 设置文件保存路径
 -                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, download.name)
 -                // 允许下载的文件类型
