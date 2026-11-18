@@ -1,0 +1,328 @@
+From 63f78d0fd39eae3683e04c73ebba20402153971a Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Wed, 18 Nov 2026 19:17:20 +0800
+Subject: [PATCH] Wire derived distribution identity into Android surfaces
+
+Patch-Id: derived-distribution-identity
+---
+ app/build.gradle.kts                          | 29 +------------------
+ app/src/main/AndroidManifest.xml              | 10 +++----
+ .../java/me/rerere/rikkahub/RouteActivity.kt  |  4 +--
+ .../BackgroundShellForegroundService.kt       |  7 +++--
+ .../ChatGenerationForegroundService.kt        |  7 +++--
+ .../service/MediaCreationForegroundService.kt |  5 ++--
+ .../service/MemoryDreamForegroundService.kt   |  5 ++--
+ .../rikkahub/service/WebServerService.kt      |  5 ++--
+ .../service/WorkspaceDocumentsProvider.kt     |  4 +--
+ app/src/main/res/xml/backup_rules.xml         |  3 +-
+ build-logic/build.gradle.kts                  | 10 +++++++
+ 11 files changed, 38 insertions(+), 51 deletions(-)
+
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 0042fe3972aaada1cdc95fdd3cfaa29a9bd9dc9d..382f940f148278fefadb7e0f659a75fd7669719c 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -1,8 +1,6 @@
+ import com.android.build.api.dsl.Packaging
+ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+-import java.io.FileInputStream
+-import java.util.Properties
+ 
+ plugins {
+     alias(libs.plugins.android.application)
+@@ -12,6 +10,7 @@ plugins {
+     alias(libs.plugins.google.services) apply false
+     alias(libs.plugins.firebase.crashlytics) apply false
+     alias(libs.plugins.baselineprofile)
++    id("rikkahub.plugin-host.product")
+ }
+ 
+ val firebaseEnabled = providers.gradleProperty("pluginHost.firebase.enabled").orNull?.toBooleanStrict() ?: false
+@@ -55,34 +54,8 @@ android {
+         }
+     }
+ 
+-    signingConfigs {
+-        create("release") {
+-            val localProperties = Properties()
+-            val localPropertiesFile = rootProject.file("local.properties")
+-
+-            if (localPropertiesFile.exists()) {
+-                localProperties.load(FileInputStream(localPropertiesFile))
+-
+-                val storeFilePath = localProperties.getProperty("storeFile")
+-                val storePasswordValue = localProperties.getProperty("storePassword")
+-                val keyAliasValue = localProperties.getProperty("keyAlias")
+-                val keyPasswordValue = localProperties.getProperty("keyPassword")
+-
+-                if (storeFilePath != null && storePasswordValue != null &&
+-                    keyAliasValue != null && keyPasswordValue != null
+-                ) {
+-                    storeFile = file(storeFilePath)
+-                    storePassword = storePasswordValue
+-                    keyAlias = keyAliasValue
+-                    keyPassword = keyPasswordValue
+-                }
+-            }
+-        }
+-    }
+-
+     buildTypes {
+         release {
+-            signingConfig = signingConfigs.getByName("release")
+             optimization {
+                 enable = true
+             }
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 763ede3fcf2e75c57c32bace58bfd1855bf1d914..c2ea0b554f7a76db39a13aba1822109156ae2c0e 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -54,7 +54,7 @@
+     android:enableOnBackInvokedCallback="true"
+     android:fullBackupContent="@xml/backup_rules"
+     android:icon="@mipmap/ic_launcher"
+-    android:label="@string/app_name"
++    android:label="@string/host_product_name"
+     android:networkSecurityConfig="@xml/network_security_config"
+     android:supportsRtl="true"
+     android:theme="@style/Theme.Rikkahub"
+@@ -93,18 +93,18 @@
+       </intent-filter>
+ 
+       <intent-filter>
+-        <action android:name="me.rerere.rikkahub.action.TRANSLATE" />
++        <action android:name="${applicationId}.action.TRANSLATE" />
+         <category android:name="android.intent.category.DEFAULT" />
+       </intent-filter>
+ 
+       <intent-filter>
+-        <action android:name="me.rerere.rikkahub.action.MEDIA_CREATION" />
++        <action android:name="${applicationId}.action.MEDIA_CREATION" />
+         <category android:name="android.intent.category.DEFAULT" />
+       </intent-filter>
+ 
+       <meta-data
+         android:name="android.app.shortcuts"
+-        android:resource="@xml/shortcuts" />
++        android:resource="@xml/host_shortcuts" />
+     </activity>
+     <activity
+       android:name=".ui.activity.ShortcutHandlerActivity"
+@@ -117,7 +117,7 @@
+ 
+         <data
+           android:host="shortcut"
+-          android:scheme="rikkahub" />
++          android:scheme="${hostDeepLinkScheme}" />
+       </intent-filter>
+     </activity>
+     <service
+diff --git a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
+index 9f9cc55df1c489cfcdf970d3346e54363af35bde..3ce24390eb605a89fa09244511dd48b257f188b9 100644
+--- a/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
++++ b/app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
+@@ -146,8 +146,8 @@ import org.koin.compose.koinInject
+ import kotlin.uuid.Uuid
+ 
+ private const val TAG = "RouteActivity"
+-private const val ACTION_TRANSLATE = "me.rerere.rikkahub.action.TRANSLATE"
+-private const val ACTION_MEDIA_CREATION = "me.rerere.rikkahub.action.MEDIA_CREATION"
++private val ACTION_TRANSLATE = "${BuildConfig.APPLICATION_ID}.action.TRANSLATE"
++private val ACTION_MEDIA_CREATION = "${BuildConfig.APPLICATION_ID}.action.MEDIA_CREATION"
+ private const val EXTRA_CONVERSATION_ID = "conversationId"
+ 
+ /** 打开指定会话的聊天页 */
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/BackgroundShellForegroundService.kt b/app/src/main/java/me/rerere/rikkahub/service/BackgroundShellForegroundService.kt
+index df08a5dc9d9f7cb12821d8bcc7ac086a1370694d..c2db8c4c7ba736efb192f38f4af6f021210f6a5f 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/BackgroundShellForegroundService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/BackgroundShellForegroundService.kt
+@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
+ import androidx.core.app.ServiceCompat
+ import androidx.core.content.ContextCompat
+ import me.rerere.rikkahub.CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID
++import me.rerere.rikkahub.BuildConfig
+ import me.rerere.rikkahub.R
+ import me.rerere.rikkahub.conversationIntent
+ import kotlin.uuid.Uuid
+@@ -25,8 +26,8 @@ private const val TAG = "BackgroundShellFgs"
+  */
+ class BackgroundShellForegroundService : Service() {
+     companion object {
+-        private const val ACTION_ACQUIRE = "me.rerere.rikkahub.action.BACKGROUND_SHELL_ACQUIRE"
+-        private const val ACTION_RELEASE = "me.rerere.rikkahub.action.BACKGROUND_SHELL_RELEASE"
++        private val ACTION_ACQUIRE = "${BuildConfig.APPLICATION_ID}.action.BACKGROUND_SHELL_ACQUIRE"
++        private val ACTION_RELEASE = "${BuildConfig.APPLICATION_ID}.action.BACKGROUND_SHELL_RELEASE"
+         private const val EXTRA_TASK_ID = "task_id"
+         private const val EXTRA_CONVERSATION_ID = "conversation_id"
+ 
+@@ -135,7 +136,7 @@ class BackgroundShellForegroundService : Service() {
+     private fun buildNotification() =
+         NotificationCompat.Builder(this, CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID)
+             .setSmallIcon(R.drawable.ic_stat_rikkahub)
+-            .setContentTitle(getString(R.string.app_name))
++            .setContentTitle(getString(R.string.host_product_name))
+             .setContentText(getString(R.string.notification_background_shell_running, activeTasks.size))
+             .setContentIntent(getConversationPendingIntent(activeTasks.values.last()))
+             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt b/app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt
+index 0349428ab8ef7f1c55c118dde8e81e4aececda96..997377c0f27c224727d2da7b18e414d32d444746 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/ChatGenerationForegroundService.kt
+@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
+ import kotlinx.coroutines.launch
+ import me.rerere.rikkahub.AppScope
+ import me.rerere.rikkahub.CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID
++import me.rerere.rikkahub.BuildConfig
+ import me.rerere.rikkahub.R
+ import me.rerere.rikkahub.conversationIntent
+ import org.koin.android.ext.android.inject
+@@ -29,8 +30,8 @@ private const val TAG = "ChatGenerationFgs"
+  */
+ class ChatGenerationForegroundService : Service() {
+     companion object {
+-        private const val ACTION_ACQUIRE = "me.rerere.rikkahub.action.CHAT_GENERATION_ACQUIRE"
+-        private const val ACTION_RELEASE = "me.rerere.rikkahub.action.CHAT_GENERATION_RELEASE"
++        private val ACTION_ACQUIRE = "${BuildConfig.APPLICATION_ID}.action.CHAT_GENERATION_ACQUIRE"
++        private val ACTION_RELEASE = "${BuildConfig.APPLICATION_ID}.action.CHAT_GENERATION_RELEASE"
+         private const val EXTRA_GENERATION_ID = "generation_id"
+         private const val EXTRA_CONVERSATION_ID = "conversation_id"
+         private const val EXTRA_ACTIVITY = "activity"
+@@ -165,7 +166,7 @@ class ChatGenerationForegroundService : Service() {
+     private fun buildNotification(generation: ActiveGeneration) =
+         NotificationCompat.Builder(this, CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID)
+             .setSmallIcon(R.drawable.ic_stat_rikkahub)
+-            .setContentTitle(getString(R.string.app_name))
++            .setContentTitle(getString(R.string.host_product_name))
+             .setContentText(
+                 getString(
+                     when (generation.activity) {
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/MediaCreationForegroundService.kt b/app/src/main/java/me/rerere/rikkahub/service/MediaCreationForegroundService.kt
+index 29d26c57a258442af44e0621f67a629c8fca0a1f..e2b4fcfce396a03c1e80f2c82986217ed440c3ef 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/MediaCreationForegroundService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/MediaCreationForegroundService.kt
+@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
+ import androidx.core.app.ServiceCompat
+ import androidx.core.content.ContextCompat
+ import me.rerere.rikkahub.MEDIA_CREATION_NOTIFICATION_CHANNEL_ID
++import me.rerere.rikkahub.BuildConfig
+ import me.rerere.rikkahub.R
+ import me.rerere.rikkahub.RouteActivity
+ import kotlin.uuid.Uuid
+@@ -25,8 +26,8 @@ private const val TAG = "MediaCreationFgs"
+  */
+ class MediaCreationForegroundService : Service() {
+     companion object {
+-        private const val ACTION_ACQUIRE = "me.rerere.rikkahub.action.MEDIA_CREATION_ACQUIRE"
+-        private const val ACTION_RELEASE = "me.rerere.rikkahub.action.MEDIA_CREATION_RELEASE"
++        private val ACTION_ACQUIRE = "${BuildConfig.APPLICATION_ID}.action.MEDIA_CREATION_ACQUIRE"
++        private val ACTION_RELEASE = "${BuildConfig.APPLICATION_ID}.action.MEDIA_CREATION_RELEASE"
+         private const val EXTRA_RECORD_ID = "record_id"
+         private const val EXTRA_SESSION_ID = "session_id"
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/MemoryDreamForegroundService.kt b/app/src/main/java/me/rerere/rikkahub/service/MemoryDreamForegroundService.kt
+index eda783889dc11d9354054e41b334e39c2fa03ed1..3e54232038550b023d04ff6179f0fdec68edb043 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/MemoryDreamForegroundService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/MemoryDreamForegroundService.kt
+@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
+ import androidx.core.app.ServiceCompat
+ import androidx.core.content.ContextCompat
+ import me.rerere.rikkahub.MEMORY_DREAM_NOTIFICATION_CHANNEL_ID
++import me.rerere.rikkahub.BuildConfig
+ import me.rerere.rikkahub.R
+ import me.rerere.rikkahub.RouteActivity
+ import me.rerere.rikkahub.data.ai.MemoryDreamKeepAlive
+@@ -27,8 +28,8 @@ private const val TAG = "MemoryDreamFgs"
+  */
+ class MemoryDreamForegroundService : Service() {
+     companion object {
+-        private const val ACTION_ACQUIRE = "me.rerere.rikkahub.action.MEMORY_DREAM_ACQUIRE"
+-        private const val ACTION_RELEASE = "me.rerere.rikkahub.action.MEMORY_DREAM_RELEASE"
++        private val ACTION_ACQUIRE = "${BuildConfig.APPLICATION_ID}.action.MEMORY_DREAM_ACQUIRE"
++        private val ACTION_RELEASE = "${BuildConfig.APPLICATION_ID}.action.MEMORY_DREAM_RELEASE"
+         private const val EXTRA_HOLD_ID = "hold_id"
+ 
+         const val NOTIFICATION_ID = 2004
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/WebServerService.kt b/app/src/main/java/me/rerere/rikkahub/service/WebServerService.kt
+index 31d541f73e0099ba64b68549dff4489233fff268..242ad874a48dc8ed66a742ff0309ff432639aa6c 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/WebServerService.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/WebServerService.kt
+@@ -15,6 +15,7 @@ import kotlinx.coroutines.Job
+ import kotlinx.coroutines.SupervisorJob
+ import kotlinx.coroutines.cancel
+ import kotlinx.coroutines.launch
++import me.rerere.rikkahub.BuildConfig
+ import me.rerere.rikkahub.R
+ import me.rerere.rikkahub.WEB_SERVER_NOTIFICATION_CHANNEL_ID
+ import me.rerere.rikkahub.data.datastore.SettingsStore
+@@ -26,8 +27,8 @@ private const val TAG = "WebServerService"
+ class WebServerService : Service() {
+ 
+     companion object {
+-        const val ACTION_START = "me.rerere.rikkahub.action.WEB_SERVER_START"
+-        const val ACTION_STOP = "me.rerere.rikkahub.action.WEB_SERVER_STOP"
++        val ACTION_START = "${BuildConfig.APPLICATION_ID}.action.WEB_SERVER_START"
++        val ACTION_STOP = "${BuildConfig.APPLICATION_ID}.action.WEB_SERVER_STOP"
+         const val EXTRA_PORT = "port"
+         const val EXTRA_LOCALHOST_ONLY = "localhost_only"
+         const val NOTIFICATION_ID = 2001
+diff --git a/app/src/main/java/me/rerere/rikkahub/service/WorkspaceDocumentsProvider.kt b/app/src/main/java/me/rerere/rikkahub/service/WorkspaceDocumentsProvider.kt
+index d238dd41816fc252861b7a0280fd0579ce4c70d9..9b9f0a16db073ce5772a1892a5122c2122979524 100644
+--- a/app/src/main/java/me/rerere/rikkahub/service/WorkspaceDocumentsProvider.kt
++++ b/app/src/main/java/me/rerere/rikkahub/service/WorkspaceDocumentsProvider.kt
+@@ -53,7 +53,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
+         cursor.newRow().apply {
+             add(Root.COLUMN_ROOT_ID, ROOT_ID)
+             add(Root.COLUMN_DOCUMENT_ID, ROOT_DOC_ID)
+-            add(Root.COLUMN_TITLE, ctx.getString(R.string.app_name))
++            add(Root.COLUMN_TITLE, ctx.getString(R.string.host_product_name))
+             add(
+                 Root.COLUMN_FLAGS,
+                 Root.FLAG_LOCAL_ONLY or Root.FLAG_SUPPORTS_IS_CHILD or Root.FLAG_SUPPORTS_CREATE,
+@@ -70,7 +70,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
+         if (target.isRoot) {
+             cursor.newRow().apply {
+                 add(Document.COLUMN_DOCUMENT_ID, ROOT_DOC_ID)
+-                add(Document.COLUMN_DISPLAY_NAME, context?.getString(R.string.app_name))
++                add(Document.COLUMN_DISPLAY_NAME, context?.getString(R.string.host_product_name))
+                 add(Document.COLUMN_MIME_TYPE, Document.MIME_TYPE_DIR)
+                 add(Document.COLUMN_FLAGS, 0)
+                 add(Document.COLUMN_SIZE, null)
+diff --git a/app/src/main/res/xml/backup_rules.xml b/app/src/main/res/xml/backup_rules.xml
+index 40e5893b9892fb5ca47e7b281363a0b533ce7334..a8e8d15acac46c11f39b9e87fdbaf1a3c21bec04 100644
+--- a/app/src/main/res/xml/backup_rules.xml
++++ b/app/src/main/res/xml/backup_rules.xml
+@@ -6,9 +6,8 @@
+    See https://developer.android.com/about/versions/12/backup-restore
+ -->
+ <full-backup-content>
++  <!-- Only upload/ is eligible; the legacy plugin-host/ directory is outside this allowlist. -->
+   <include
+     domain="file"
+     path="upload/" />
+-  <!-- Keep the older upload-only policy and explicitly exclude the retired plugin directory. -->
+-  <exclude domain="file" path="plugin-host/" />
+ </full-backup-content>
+diff --git a/build-logic/build.gradle.kts b/build-logic/build.gradle.kts
+index 8522f1c7f4a8a1c63b3c37a96259b8d061ec38fb..36f485f2f7e066dbf81fcb917ee046878fa5a294 100644
+--- a/build-logic/build.gradle.kts
++++ b/build-logic/build.gradle.kts
+@@ -8,8 +8,18 @@ dependencies {
+     implementation(libs.kotlin.gradle.plugin)
+ }
+ 
++kotlin {
++    sourceSets.getByName("main").kotlin.srcDir(
++        "../vendor/rikka-plugin-host/distribution/gradle-plugin/src/main/kotlin"
++    )
++}
++
+ gradlePlugin {
+     plugins {
++        register("hostProduct") {
++            id = "rikkahub.plugin-host.product"
++            implementationClass = "dev.rikkahub.plugins.distribution.HostProductPlugin"
++        }
+         register("androidLibrary") {
+             id = "rikkahub.android.library"
+             implementationClass = "AndroidLibraryConventionPlugin"
