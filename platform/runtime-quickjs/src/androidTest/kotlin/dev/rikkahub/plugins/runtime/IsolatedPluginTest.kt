@@ -94,7 +94,8 @@ class IsolatedPluginTest {
             }
         }
         try {
-            withTimeout(5_000) { context.openReply.await() }
+            // Preparation has its own 15-second production deadline; Stop starts after real OPEN was observed.
+            withTimeout(20_000) { context.openReply.await() }
             withTimeout(6_000) { call.cancelAndJoin() }
             assertTrue(failure.await() is CancellationException)
             assertFalse(failure.await() is ExecutionResultUnavailable)

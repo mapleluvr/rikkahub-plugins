@@ -562,6 +562,22 @@
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/dev/rikkahub/plugins/testing/IsolatedReplyFaultContext.kt"
     },
     {
+      "from": "platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/ReplyReadBoundaryTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/ReplyReadBoundaryTest.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/ReplyReadLifecycleTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/ReplyReadLifecycleTest.kt"
+    },
+    {
+      "from": "verification/android/ReplyReadStall.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/testing/ReplyReadStall.kt"
+    },
+    {
+      "from": "verification/android/ReplyReadStall.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/dev/rikkahub/plugins/testing/ReplyReadStall.kt"
+    },
+    {
       "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolReplyDeliveryTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolReplyDeliveryTest.kt"
     }

@@ -8,13 +8,17 @@ import dev.rikkahub.plugins.protocol.PluginToolDeclaration
 import dev.rikkahub.plugins.protocol.RunStatus
 import dev.rikkahub.plugins.runtime.PluginHost
 import dev.rikkahub.plugins.testing.IsolatedReplyFaultContext
+import dev.rikkahub.plugins.testing.ReplyReadStall
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -56,17 +60,37 @@ import kotlin.uuid.Uuid
 
 /** Production ChatService + isolated QuickJS + owned Room reopen + actual loopback HTTP. */
 class PluginToolReplyDeliveryTest {
+    private enum class DeliveryMode { COMPLETE, WRITER_DEATH, ACTIVE_READ_STOP, ACTIVE_READ_DEADLINE }
+
     @Test
     fun shortRealPipeKeepsOriginalRoomRunWaitingAcrossReopenAndStopAllowsNewHttp() = runBlocking {
-        verify(shortReply = true)
+        verify(DeliveryMode.WRITER_DEATH)
     }
 
     @Test
     fun completeRealPipePersistsToolAndAllowsExactlyOneContinuationHttp() = runBlocking {
-        verify(shortReply = false)
+        verify(DeliveryMode.COMPLETE)
     }
 
-    private suspend fun verify(shortReply: Boolean) {
+    @Test
+    fun stopDuringActualReplyReadDrainsAndPersistsCancelledRunWithoutNewHttp() = runBlocking {
+        verify(DeliveryMode.ACTIVE_READ_STOP)
+    }
+
+    @Test
+    fun internalDeadlineDuringActualReplyReadPersistsOriginalWaitingRunWithoutNewHttp() = runBlocking {
+        verify(DeliveryMode.ACTIVE_READ_DEADLINE)
+    }
+
+    private suspend fun verify(mode: DeliveryMode) = coroutineScope {
+        val shortReply = mode == DeliveryMode.WRITER_DEATH
+        val unconfirmed = mode != DeliveryMode.COMPLETE
+        val stopped = mode == DeliveryMode.ACTIVE_READ_STOP
+        val stall = if (mode == DeliveryMode.ACTIVE_READ_STOP || mode == DeliveryMode.ACTIVE_READ_DEADLINE) {
+            ReplyReadStall()
+        } else {
+            null
+        }
         val koin = GlobalContext.get()
         val application = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
         val storage = File(application.cacheDir, "reply-delivery-${Uuid.random()}").apply { mkdirs() }
@@ -76,6 +100,7 @@ class PluginToolReplyDeliveryTest {
                 application,
                 holdReply = shortReply,
                 delayDisconnect = shortReply,
+                mutateHeader = { header -> stall?.replaceReply(header) },
                 storage = storage
             )
         val settings = koin.get<SettingsStore>()
@@ -123,18 +148,40 @@ class PluginToolReplyDeliveryTest {
                 context.crashWriter(reply)
                 withContext(Dispatchers.Main.immediate) { reply.forwardOriginalPipe() }
             }
+            if (stall != null) {
+                stall.awaitReplyHeader()
+                stall.awaitPrefixConsumed()
+                assertEquals(1, server.requests.size)
+                assertEquals(1, context.callsSent.get())
+                if (stopped) {
+                    val stop = async(Dispatchers.IO) { service.stopGeneration(initial.id) }
+                    val drained = withTimeoutOrNull(8_000) {
+                        stop.await()
+                        true
+                    } == true
+                    assertTrue("Production Service Stop must drain without producer EOF", drained)
+                }
+                val drained = withTimeoutOrNull(20_000) {
+                    service.getGenerationJobStateFlow(initial.id).first { it == null }
+                    true
+                } == true
+                assertTrue("Production Service deadline must drain without producer EOF", drained)
+                stall.requireConsumerReleased()
+            }
             withTimeout(25_000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
             val saved = repository.getConversationById(initial.id)!!
             val run = saved.executionLedger().runs.values.single()
             val tool = saved.currentMessages.flatMap { it.getTools() }.single()
             assertEquals(1, context.callsSent.get())
             assertEquals(listOf(installed.lease), run.pluginLeases)
-            if (shortReply) {
+            if (unconfirmed) {
                 assertEquals("run=$run; tool=$tool; HTTP=${server.requests}", 1, server.requests.size)
-                assertEquals(RunStatus.ACTIVE, run.state.status)
-                assertEquals("BeforeTool", run.boundary)
-                assertEquals("delivery-call", run.toolCallId)
-                assertTrue("host.recovery" in run.state.gates)
+                assertEquals(if (stopped) RunStatus.CANCELLED else RunStatus.ACTIVE, run.state.status)
+                if (!stopped) {
+                    assertEquals("BeforeTool", run.boundary)
+                    assertEquals("delivery-call", run.toolCallId)
+                    assertTrue("host.recovery" in run.state.gates)
+                }
                 assertFalse(tool.isExecuted)
                 assertTrue(tool.startedAt != null)
                 assertTrue(tool.output.isEmpty())
@@ -170,29 +217,39 @@ class PluginToolReplyDeliveryTest {
             assertEquals(run.state.stepsUsed, originalRun.state.stepsUsed)
             assertEquals(run.state.attemptsUsed, originalRun.state.attemptsUsed)
             assertEquals(run.state.status, originalRun.state.status)
-            if (shortReply) {
+            if (unconfirmed) {
                 assertTrue(host.authorizedPackages(originalRun.pluginLeases))
                 service.addConversationReference(initial.id)
-                service.resumePluginRun(initial.id)
-                withTimeout(20_000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
-                val restored = repository.getConversationById(initial.id)!!
-                assertEquals(1, server.requests.size)
-                assertEquals(1, context.callsSent.get())
-                val waiting = restored.executionLedger().runs.getValue(run.state.ref.runId)
-                assertEquals(RunStatus.ACTIVE, waiting.state.status)
-                assertTrue("host.recovery" in waiting.state.gates)
-                assertEquals(run.state.stepsUsed, waiting.state.stepsUsed)
-                assertEquals(run.state.attemptsUsed, waiting.state.attemptsUsed)
-                val unfinished = restored.currentMessages.flatMap { it.getTools() }.single()
-                assertFalse(unfinished.isExecuted)
-                assertTrue(unfinished.output.isEmpty())
-                assertNull(unfinished.finishedAt)
-
-                service.stopGeneration(initial.id)
+                if (!stopped) {
+                    service.resumePluginRun(initial.id)
+                    withTimeout(20_000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
+                    val restored = repository.getConversationById(initial.id)!!
+                    assertEquals(1, server.requests.size)
+                    assertEquals(1, context.callsSent.get())
+                    val waiting = restored.executionLedger().runs.getValue(run.state.ref.runId)
+                    assertEquals(RunStatus.ACTIVE, waiting.state.status)
+                    assertTrue("host.recovery" in waiting.state.gates)
+                    assertEquals(run.state.stepsUsed, waiting.state.stepsUsed)
+                    assertEquals(run.state.attemptsUsed, waiting.state.attemptsUsed)
+                    val unfinished = restored.currentMessages.flatMap { it.getTools() }.single()
+                    assertFalse(unfinished.isExecuted)
+                    assertTrue(unfinished.output.isEmpty())
+                    assertNull(unfinished.finishedAt)
+                    service.stopGeneration(initial.id)
+                }
                 assertEquals(RunStatus.CANCELLED, repository.getConversationById(initial.id)!!.executionLedger()
                     .runs.getValue(run.state.ref.runId).state.status)
                 service.sendMessage(initial.id, listOf(UIMessagePart.Text("fresh input")))
-                withTimeout(20_000) { service.getGenerationJobStateFlow(initial.id).first { it == null } }
+                withTimeout(20_000) {
+                    // A cold queue first finishes its load job, then launches the answering job.
+                    // The intermediate null is not completion of this new input.
+                    service.getConversationFlow(initial.id).first { current ->
+                        current.executionLedger().runs.values.any {
+                            it.state.ref.runId != run.state.ref.runId && it.state.status == RunStatus.COMPLETED
+                        }
+                    }
+                    service.getGenerationJobStateFlow(initial.id).first { it == null }
+                }
                 val completed = repository.getConversationById(initial.id)!!
                 assertEquals(2, server.requests.size)
                 assertEquals("HTTP finished", completed.currentMessages.last().parts
@@ -205,7 +262,7 @@ class PluginToolReplyDeliveryTest {
                     it.state.ref.runId != run.state.ref.runId && it.state.status == RunStatus.COMPLETED
                 })
                 println(
-                    "PIPE SERVICE short=true HTTP=1-before-Stop/2-after-new-input originalRun=${run.state.ref.runId} RoomClosedReopened=true CALL=1"
+                    "PIPE SERVICE mode=$mode HTTP=1-before-Stop/2-after-new-input originalRun=${run.state.ref.runId} RoomClosedReopened=true CALL=1"
                 )
             } else {
                 assertTrue(reopened.currentMessages.flatMap { it.getTools() }.single().isExecuted)
@@ -214,8 +271,10 @@ class PluginToolReplyDeliveryTest {
                     "PIPE SERVICE complete=true HTTP=2 originalRun=${run.state.ref.runId} RoomClosedReopened=true CALL=1"
                 )
             }
+            assertEquals("New input must not replay the old CALL", 1, context.callsSent.get())
             server.assertHealthy()
         } finally {
+            stall?.close()
             try {
                 service.stopGeneration(initial.id)
                 service.removeConversationReference(initial.id)

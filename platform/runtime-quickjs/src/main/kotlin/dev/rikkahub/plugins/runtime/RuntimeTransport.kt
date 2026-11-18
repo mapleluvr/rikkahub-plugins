@@ -13,8 +13,10 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 
 /** Large Binder payloads travel through read-only anonymous files, never as inline Binder buffers. */
 internal object RuntimeTransport {
@@ -52,10 +54,30 @@ internal object RuntimeTransport {
     /** The isolated service cannot create files in host storage; use a bounded pipe for replies. */
     fun responsePipe(): Array<ParcelFileDescriptor> = ParcelFileDescriptor.createPipe()
 
+    /** Own the read FD until EOF or cancellation; a stalled producer must not pin an IO worker. */
     suspend fun incoming(descriptor: ParcelFileDescriptor): ByteArray = descriptor.use {
         withContext(Dispatchers.IO) {
-            ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {
-                dev.rikkahub.plugins.core.PluginArchive.readBounded(it, LIMIT)
+            val fd = descriptor.fileDescriptor
+            try {
+                Os.fcntlInt(fd, OsConstants.F_SETFL, Os.fcntlInt(fd, OsConstants.F_GETFL, 0) or OsConstants.O_NONBLOCK)
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val count = try {
+                        Os.read(fd, buffer, 0, buffer.size)
+                    } catch (error: ErrnoException) {
+                        if (error.errno != OsConstants.EAGAIN && error.errno != OsConstants.EINTR) throw error
+                        delay(5)
+                        continue
+                    }
+                    if (count == 0) break
+                    require(count <= LIMIT - output.size()) { "Plugin transport exceeds its byte limit" }
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            } catch (error: ErrnoException) {
+                throw IOException("Could not read plugin transport", error)
             }
         }
     }
