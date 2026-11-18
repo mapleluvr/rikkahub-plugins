@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "name": "RikkaHub Plugins",
+  "applicationId": "io.github.mapleluvr.rikkahub",
+  "deepLinkScheme": "rikkahub-plugins",
+  "versionCode": 1,
+  "versionName": "3.3.0-plugins.1",
+  "updates": {
+    "repository": "mapleluvr/rikkahub-plugin-host",
+    "assetName": "host-release.json"
+  },
+  "signingCertificateSha256": "bda4cb9edbbd6e9d13e21e0f37195eb27d8c9bdb5f9cdec0720c87a714ca426b"
+}

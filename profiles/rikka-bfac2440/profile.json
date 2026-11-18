@@ -7,5 +7,6 @@
   },
   "series": "patches/rikka-bfac2440/series.json",
   "toolchain": "profiles/rikka-bfac2440/toolchain.json",
-  "sourceMap": "profiles/rikka-bfac2440/source-map.json"
+  "sourceMap": "profiles/rikka-bfac2440/source-map.json",
+  "product": "distribution/product.json"
 }

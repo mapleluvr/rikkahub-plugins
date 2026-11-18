@@ -580,6 +580,18 @@
     {
       "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolReplyDeliveryTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolReplyDeliveryTest.kt"
+    },
+    {
+      "from": "distribution/product.json",
+      "to": "vendor/rikka-plugin-host/distribution/product.json"
+    },
+    {
+      "from": "distribution/product.gradle.kts",
+      "to": "vendor/rikka-plugin-host/distribution/product.gradle.kts"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/DistributionIdentityTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/DistributionIdentityTest.kt"
     }
   ]
 }
