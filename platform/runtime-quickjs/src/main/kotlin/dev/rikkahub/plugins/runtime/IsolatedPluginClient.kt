@@ -216,7 +216,7 @@ class IsolatedPluginClient private constructor(
                     if (bundle.getBoolean(RuntimeTransport.RESULT_UNAVAILABLE)) throw ExecutionResultUnavailable(it)
                     error(it)
                 }
-                RuntimeTransport.incoming(RuntimeTransport.descriptor(bundle)).toString(Charsets.UTF_8)
+                RuntimeTransport.incomingReply(bundle).toString(Charsets.UTF_8)
             } finally {
                 RuntimeTransport.discard(bundle)
             }

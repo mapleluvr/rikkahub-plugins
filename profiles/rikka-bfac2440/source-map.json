@@ -548,6 +548,22 @@
     {
       "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolServiceInterruptionTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolServiceInterruptionTest.kt"
+    },
+    {
+      "from": "verification/android/IsolatedReplyFaultContext.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/testing/IsolatedReplyFaultContext.kt"
+    },
+    {
+      "from": "platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/ReplyPipeDeliveryTest.kt",
+      "to": "vendor/rikka-plugin-host/platform/runtime-quickjs/src/androidTest/kotlin/dev/rikkahub/plugins/runtime/ReplyPipeDeliveryTest.kt"
+    },
+    {
+      "from": "verification/android/IsolatedReplyFaultContext.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/dev/rikkahub/plugins/testing/IsolatedReplyFaultContext.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolReplyDeliveryTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolReplyDeliveryTest.kt"
     }
   ]
 }

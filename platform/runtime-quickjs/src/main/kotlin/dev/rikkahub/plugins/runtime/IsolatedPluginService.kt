@@ -161,7 +161,10 @@ class IsolatedPluginService : Service() {
             target.send(Message.obtain().apply {
                 arg1 = request
                 data = Bundle().apply {
-                    if (pipe != null) putParcelable("payload", pipe[0])
+                    if (pipe != null) {
+                        putParcelable("payload", pipe[0])
+                        putInt(RuntimeTransport.PAYLOAD_SIZE, bytes.size)
+                    }
                     result.exceptionOrNull()?.let {
                         putString("error", (it.message ?: "Plugin failed").take(1024))
                         putBoolean(

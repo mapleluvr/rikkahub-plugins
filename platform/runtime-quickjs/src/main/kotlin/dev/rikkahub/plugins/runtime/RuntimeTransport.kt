@@ -5,6 +5,8 @@ import android.os.ParcelFileDescriptor
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
+import dev.rikkahub.plugins.core.ExecutionResultUnavailable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
@@ -23,6 +25,7 @@ internal object RuntimeTransport {
     // A canceled isolated evaluation has no confirmed result; this is never a user Stop signal.
     const val RESULT_UNAVAILABLE = "result-unavailable"
     const val LIMIT = 6 * 1024 * 1024
+    const val PAYLOAD_SIZE = "payload-size"
 
     /** No descriptor crosses a cancellable dispatcher boundary without an owner. */
     suspend fun withOutgoing(directory: File, bytes: ByteArray?, send: suspend (ParcelFileDescriptor?) -> Unit) {
@@ -55,6 +58,25 @@ internal object RuntimeTransport {
                 dev.rikkahub.plugins.core.PluginArchive.readBounded(it, LIMIT)
             }
         }
+    }
+
+    /** A reply header/FD is not a result: the complete declared UTF-8 payload must arrive first. */
+    suspend fun incomingReply(bundle: Bundle): ByteArray = try {
+        descriptor(bundle).use { descriptor ->
+            val expected = bundle.getInt(PAYLOAD_SIZE, -1)
+            require(expected in 0..LIMIT) { "Missing or invalid runtime reply length" }
+            val bytes = incoming(descriptor)
+            require(bytes.size == expected) { "Runtime reply ended at ${bytes.size} bytes; expected $expected" }
+            bytes
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        currentCoroutineContext().ensureActive()
+        throw ExecutionResultUnavailable(
+            "Plugin runtime reply was not completely delivered; uncertain work must be reconciled",
+            error
+        )
     }
 
     /** A slow/unread pipe must remain cancellable so CLOSE can drain its writer. */
