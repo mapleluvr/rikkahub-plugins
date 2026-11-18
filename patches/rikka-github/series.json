@@ -267,6 +267,17 @@
       "paths": [
         "app/src/test/java/me/rerere/rikkahub/data/datastore/SettingsFieldsTest.kt"
       ]
+    },
+    {
+      "id": "host-apk-resource-ownership",
+      "file": "patches/rikka-github/0020-host-apk-resource-ownership.patch",
+      "sha256": "1e284074c7fb5e40ebaa916a3769e0fc642c0e585fb46a3a8865b7b4a2ab96d2",
+      "paths": [
+        "app/src/main/AndroidManifest.xml",
+        "app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt",
+        "app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt",
+        "app/src/main/res/xml/file_paths.xml"
+      ]
     }
   ]
 }

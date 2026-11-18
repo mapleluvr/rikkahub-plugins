@@ -1,0 +1,257 @@
+From 00547506d8da9e125b14cefe9b78893c3a75e12a Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Thu, 19 Nov 2026 04:51:43 +0800
+Subject: [PATCH] Own APK installation requests and private URI material
+
+Patch-Id: host-apk-resource-ownership
+---
+ app/src/main/AndroidManifest.xml              |   4 +
+ .../rikkahub/ui/components/ui/UpdateCard.kt   |  11 ++
+ .../me/rerere/rikkahub/utils/UpdateChecker.kt | 106 ++++++++++++++----
+ app/src/main/res/xml/file_paths.xml           |   3 +
+ 4 files changed, 103 insertions(+), 21 deletions(-)
+
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index c2ea0b554f7a76db39a13aba1822109156ae2c0e..b9d29d7a88afc5723fd917ca8bf79bf38b21adbb 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -60,6 +60,10 @@
+     android:theme="@style/Theme.Rikkahub"
+     android:usesCleartextTraffic="true"
+     tools:targetApi="33">
++    <activity
++      android:name=".update.HostInstallActivity"
++      android:exported="false"
++      android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+     <activity
+       android:name=".ui.activity.SafeModeActivity"
+       android:exported="false"
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt b/app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt
+index 5f92ada794033a144939b064a43328ab89386a72..4da76545f752cab3e278a68c8724fa7674a0f8e7 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt
+@@ -41,6 +41,10 @@ fun UpdateCard(vm: ChatVM) {
+     val state by vm.updateState.collectAsStateWithLifecycle()
+     val download by checker.downloadState.collectAsStateWithLifecycle()
+     val context = LocalContext.current
++    LifecycleResumeEffect(checker) {
++        checker.refreshInstallation()
++        onPauseOrDispose {}
++    }
+     state.onError { error ->
+         Card {
+             Column(Modifier.padding(12.dp)) {
+@@ -88,6 +92,13 @@ fun UpdateCard(vm: ChatVM) {
+                             TextButton(onClick = checker::cancelDownload) { Text(stringResource(android.R.string.cancel)) }
+                         }
+ 
++                        is HostUpdateDownload.Installing -> {
++                            Text(stringResource(R.string.host_update_waiting_install))
++                            TextButton(onClick = { checker.download(candidate) }) {
++                                Text(stringResource(R.string.host_update_prepare_again))
++                            }
++                        }
++
+                         is HostUpdateDownload.Ready -> if (current.candidate == candidate) {
+                             var canInstall by rememberSaveable { mutableStateOf(false) }
+                             LifecycleResumeEffect(context) {
+diff --git a/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt b/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt
+index 691898230abd592b2d1553522f8fb146cf61502b..d41c77bc119140561870818934fbfca1f57b87e8 100644
+--- a/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt
++++ b/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt
+@@ -1,5 +1,6 @@
+ package me.rerere.rikkahub.utils
+ 
++import android.content.ActivityNotFoundException
+ import android.content.Context
+ import android.content.Intent
+ import android.content.pm.PackageManager
+@@ -8,19 +9,27 @@ import androidx.annotation.MainThread
+ import androidx.core.content.FileProvider
+ import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.Job
++import kotlinx.coroutines.NonCancellable
++import kotlinx.coroutines.currentCoroutineContext
++import kotlinx.coroutines.ensureActive
+ import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.SharingStarted
+ import kotlinx.coroutines.flow.asStateFlow
+ import kotlinx.coroutines.flow.stateIn
+ import kotlinx.coroutines.flow.transformLatest
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ import me.rerere.rikkahub.AppScope
+ import me.rerere.rikkahub.BuildConfig
+ import me.rerere.rikkahub.plugins.GitHubPluginHttp
+-import me.rerere.rikkahub.update.HostApkStaging
++import me.rerere.rikkahub.update.HostApkIdentity
+ import me.rerere.rikkahub.update.HostApkVerifier
++import me.rerere.rikkahub.update.HostInstallActivity
++import me.rerere.rikkahub.update.HostInstallTicket
++import me.rerere.rikkahub.update.HostPreparedApk
+ import me.rerere.rikkahub.update.HostReleaseResolver
+ import me.rerere.rikkahub.update.HostUpdateCandidate
++import me.rerere.rikkahub.update.hostApkStaging
+ import java.io.File
+ 
+ internal sealed interface HostUpdateDownload {
+@@ -28,6 +37,7 @@ internal sealed interface HostUpdateDownload {
+     data object Downloading : HostUpdateDownload
+     data object Verifying : HostUpdateDownload
+     data class Ready(val candidate: HostUpdateCandidate) : HostUpdateDownload
++    data class Installing(val candidate: HostUpdateCandidate) : HostUpdateDownload
+     data class Failed(val message: String?) : HostUpdateDownload
+ }
+ 
+@@ -39,15 +49,27 @@ class UpdateChecker(
+     private val http = GitHubPluginHttp(token)
+     private val enabled = !BuildConfig.DEBUG && !BuildConfig.IS_PLAY_STORE
+     private val verifier = HostApkVerifier(context.packageManager, context.packageName, BuildConfig.HOST_APK_CERTIFICATE_SHA256)
+-    private val staging = HostApkStaging(File(context.cacheDir, "host-updates"))
++    private val staging = hostApkStaging(context)
+     private val refresh = MutableStateFlow(0L)
+     private val download = MutableStateFlow<HostUpdateDownload>(HostUpdateDownload.Idle)
+     internal val downloadState = download.asStateFlow()
+ 
+-    private var prepared: File? = null
+-    private var handedToInstaller = false
++    private var prepared: HostPreparedApk? = null
++    private var activeInstall: HostInstallTicket? = null
+     private var downloading: Job? = null
+ 
++    init {
++        appScope.launch {
++            try {
++                staging.recover()
++            } catch (cancelled: CancellationException) {
++                throw cancelled
++            } catch (error: Exception) {
++                download.value = HostUpdateDownload.Failed(error.message)
++            }
++        }
++    }
++
+     internal val updateState = refresh.transformLatest<Long, UiState<HostUpdateCandidate?>> {
+         emit(UiState.Loading)
+         try {
+@@ -67,20 +89,23 @@ class UpdateChecker(
+     @MainThread
+     internal fun download(candidate: HostUpdateCandidate) {
+         if (!enabled || downloading?.isCompleted == false || updateState.value != UiState.Success(candidate)) return
+-        discardPrepared()
+         download.value = HostUpdateDownload.Downloading
+         downloading = appScope.launch {
+             try {
++                discardPrepared()
+                 val path = resolver().confirmDownload(candidate)
+                 prepared = staging.prepare(
+                     download = { http.downloadAsset(path, it, candidate.artifact.sizeBytes) },
+                     verify = {
+                         download.value = HostUpdateDownload.Verifying
+                         verifier.verify(it, candidate)
+-                    }
++                    },
++                    identity = HostApkIdentity(candidate.artifact.sha256, candidate.artifact.sizeBytes, candidate.versionCode.toLong()),
+                 )
++                currentCoroutineContext().ensureActive()
+                 download.value = HostUpdateDownload.Ready(candidate)
+             } catch (cancelled: CancellationException) {
++                discardPrepared()
+                 download.value = HostUpdateDownload.Idle
+                 throw cancelled
+             } catch (error: Exception) {
+@@ -94,26 +119,65 @@ class UpdateChecker(
+         downloading?.cancel()
+     }
+ 
+-    /** Called from the foreground. The system Activity owns the installation confirmation. */
++    /** Foreground installation transfers an exact durable request to an internal Activity. */
+     @MainThread
+     internal fun install(candidate: HostUpdateCandidate, launch: (Intent) -> Unit) {
+-        if (!enabled || download.value != HostUpdateDownload.Ready(candidate)) return
+-        try {
+-            val apk = requireNotNull(prepared)
+-            check(apk.isFile && verifier.installedCode() < candidate.versionCode) { "This update is no longer available" }
+-            launch(installIntent(context, apk))
+-            // The installer can open this grant after startActivity returns.
+-            handedToInstaller = true
+-        } catch (error: Exception) {
+-            discardPrepared()
+-            download.value = HostUpdateDownload.Failed(error.message)
++        if (!enabled || downloading?.isCompleted == false || download.value != HostUpdateDownload.Ready(candidate)) return
++        val apk = prepared ?: return
++        download.value = HostUpdateDownload.Installing(candidate)
++        downloading = appScope.launch {
++            var ticket: HostInstallTicket? = null
++            var enteredBridgeLaunch = false
++            try {
++                check(apk.file.isFile && verifier.installedCode() < candidate.versionCode) { "This update is no longer available" }
++                val request = staging.reserveInstall(apk)
++                ticket = request
++                activeInstall = request
++                currentCoroutineContext().ensureActive()
++                enteredBridgeLaunch = true
++                launch(HostInstallActivity.intent(context, request))
++                discardPrepared()
++            } catch (error: Throwable) {
++                if (!enteredBridgeLaunch || error is ActivityNotFoundException || error is SecurityException) {
++                    ticket?.let { request ->
++                        try {
++                            withContext(NonCancellable) { staging.refuseUnsentInstall(request) }
++                        } catch (cleanup: Throwable) {
++                            error.addSuppressed(cleanup)
++                        }
++                    }
++                }
++                if (error is CancellationException) {
++                    discardPrepared()
++                    if (!enteredBridgeLaunch) download.value = HostUpdateDownload.Idle
++                    throw error
++                }
++                download.value = HostUpdateDownload.Failed(error.message)
++            }
++        }
++    }
++
++    @MainThread
++    internal fun refreshInstallation() {
++        val request = activeInstall ?: return
++        appScope.launch {
++            try {
++                if (!staging.hasInstall(request) && activeInstall == request) {
++                    activeInstall = null
++                    if (download.value is HostUpdateDownload.Installing) download.value = HostUpdateDownload.Idle
++                }
++            } catch (cancelled: CancellationException) {
++                throw cancelled
++            } catch (error: Exception) {
++                if (activeInstall == request) download.value = HostUpdateDownload.Failed(error.message)
++            }
+         }
+     }
+ 
+-    private fun discardPrepared() {
+-        if (!handedToInstaller) prepared?.delete()
+-        prepared = null
+-        handedToInstaller = false
++    private suspend fun discardPrepared() {
++        val current = prepared ?: return
++        withContext(NonCancellable) { staging.discard(current) }
++        if (prepared === current) prepared = null
+     }
+ 
+     private fun resolver() = HostReleaseResolver(
+diff --git a/app/src/main/res/xml/file_paths.xml b/app/src/main/res/xml/file_paths.xml
+index 87077f5ea632d9811bf7a09801292bb8eca4bcbe..26c61979410aa40880d1b6f8a169d179c78c1169 100644
+--- a/app/src/main/res/xml/file_paths.xml
++++ b/app/src/main/res/xml/file_paths.xml
+@@ -3,6 +3,9 @@
+   <cache-path
+     name="cache"
+     path="." />
++  <files-path
++    name="host_updates_owned"
++    path="../no_backup/host-updates/" />
+   <external-files-path
+     name="external_files"
+     path="." />
