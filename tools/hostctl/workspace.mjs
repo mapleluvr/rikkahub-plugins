@@ -48,7 +48,13 @@ async function assemble(inputs, { source, out }) {
   const adapterBase = git(out, ['rev-parse', 'HEAD']);
   for (const patch of inputs.patches) {
     // stdin avoids line-ending rewriting and shell expansion of patch bytes.
-    git(out, ['am', '--3way'], { input: patch.bytes });
+    try {
+      git(out, ['am', '--3way'], { input: patch.bytes });
+    } catch (error) {
+      const conflicts = git(out, ['diff', '--name-only', '--diff-filter=U']);
+      const files = conflicts ? `\nConflicted files:\n${conflicts}` : '';
+      throw new Error(`Patch ${patch.id} failed against ${inputs.config.upstream.commit} in ${out}${files}\n${error.message}`, { cause: error });
+    }
   }
   const lock = {
     schemaVersion: 1, profile: inputs.profile, maintenanceCommit: inputs.commit,
@@ -62,6 +68,29 @@ async function assemble(inputs, { source, out }) {
   };
   await writeFile(join(out, '.git/hostctl.json'), JSON.stringify(lock, null, 2) + '\n');
   return lock;
+}
+
+/** Observe the branch without changing any release input. */
+export async function observeUpstream({ repo, profile, source, branch = 'master' }) {
+  const inputs = loadInputs(repo, profile);
+  const ref = `refs/heads/${branch}`;
+  git(repo, ['check-ref-format', ref]);
+  const url = source ?? inputs.config.upstream.url;
+  let response;
+  try {
+    response = git(repo, ['ls-remote', '--exit-code', '--refs', '--', url, ref]);
+  } catch (error) {
+    throw new Error(`Cannot observe upstream branch ${branch}: ${error.message}`, { cause: error });
+  }
+  const [observedCommit, observedRef] = response.split('\t');
+  if (!/^[a-f0-9]{40}$/.test(observedCommit) || observedRef !== ref) {
+    throw new Error(`Unexpected upstream response for ${ref}`);
+  }
+  const pinnedCommit = inputs.config.upstream.commit;
+  return {
+    profile, maintenanceCommit: inputs.commit, ref, pinnedCommit, observedCommit,
+    status: observedCommit === pinnedCommit ? 'current' : 'changed',
+  };
 }
 
 export async function prepare({ repo, profile, source, out }) {

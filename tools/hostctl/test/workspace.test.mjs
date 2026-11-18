@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
-import { prepare, verifyReplay, exportSeries } from '../workspace.mjs';
+import { prepare, verifyReplay, exportSeries, observeUpstream } from '../workspace.mjs';
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -51,6 +51,44 @@ test('assembles fixed input and reproduces the same source tree in another check
   assert.equal(lock.maintenanceCommit, git(f.repo, 'rev-parse', 'HEAD'));
   const replay = await verifyReplay({ ...f.options, out: join(f.root, 'replay'), expected: f.options.out });
   assert.equal(replay.sourceTree, lock.sourceTree);
+});
+
+test('reports the upstream branch tip without advancing committed inputs', async t => {
+  const f = await fixture(t);
+  const previous = await observeUpstream({ ...f.options, branch: 'main' });
+  assert.equal(previous.observedCommit, f.upstream);
+  assert.equal(previous.status, 'current');
+  await writeFile(join(f.source, 'upstream-added.txt'), 'new upstream behavior\n');
+  git(f.source, 'add', '.');
+  git(f.source, 'commit', '-m', 'advance upstream');
+  const next = await observeUpstream({ ...f.options, branch: 'main' });
+  assert.equal(next.observedCommit, git(f.source, 'rev-parse', 'HEAD'));
+  assert.equal(next.pinnedCommit, previous.pinnedCommit);
+  assert.equal(next.status, 'changed');
+  assert.equal(git(f.repo, 'status', '--porcelain'), '');
+  await assert.rejects(observeUpstream({ ...f.options, branch: '*' }), /branch|ref/i);
+  await assert.rejects(observeUpstream({ ...f.options, branch: 'missing' }), /missing/);
+});
+
+test('incompatible upstream replay reports the exact patch and preserves the conflict', async t => {
+  const f = await fixture(t);
+  await prepare(f.options);
+  await writeFile(join(f.options.out, 'entry.txt'), 'host edit\n');
+  git(f.options.out, 'add', '.');
+  git(f.options.out, 'commit', '-m', 'Host seam', '-m', 'Patch-Id: host-seam');
+  await exportSeries({ repo: f.repo, workspace: f.options.out });
+  await writeFile(join(f.source, 'entry.txt'), 'incompatible upstream edit\n');
+  git(f.source, 'commit', '-am', 'upstream edits the same file');
+  const configPath = 'profiles/test/profile.json';
+  const config = JSON.parse(await readFile(join(f.repo, configPath), 'utf8'));
+  config.upstream.commit = git(f.source, 'rev-parse', 'HEAD');
+  await f.put(configPath, config);
+  f.commit();
+  const out = join(f.root, 'candidate');
+  await assert.rejects(prepare({ ...f.options, out }), /host-seam.*entry\.txt/s);
+  assert.equal(git(out, 'diff', '--name-only', '--diff-filter=U'), 'entry.txt');
+  await assert.rejects(readFile(join(out, '.git/hostctl.json')), { code: 'ENOENT' });
+  assert.equal(git(f.repo, 'status', '--porcelain'), '');
 });
 
 test('exports actual host changes and verifies their tree before replacing the series', async t => {

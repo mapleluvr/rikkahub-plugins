@@ -7,13 +7,13 @@ import { exportSource } from './source.mjs';
 import { loadInputs } from './inputs.mjs';
 import { assertApkIdentity, assertApkProduct, inspectApk } from './apk.mjs';
 import { writeHostReleaseIndex } from './host-release.mjs';
-import { prepare, verifyReplay, exportSeries } from './workspace.mjs';
+import { prepare, verifyReplay, exportSeries, observeUpstream } from './workspace.mjs';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
-    ...Object.fromEntries(['profile', 'source', 'out', 'expected', 'workspace', 'apk', 'aapt2', 'java', 'apksigner-jar', 'apk-dir', 'provenance', 'notes']
+    ...Object.fromEntries(['profile', 'source', 'out', 'expected', 'workspace', 'apk', 'aapt2', 'java', 'apksigner-jar', 'apk-dir', 'provenance', 'notes', 'branch']
       .map(name => [name, { type: 'string' }])),
     debug: { type: 'boolean' },
   },
@@ -71,6 +71,7 @@ try {
       });
       break;
     }
+    case 'observe-upstream': result = await observeUpstream(options); break;
     case 'prepare': result = await prepare(options); break;
     case 'verify-replay':
       if (!options.expected) throw new Error('--expected is required');
@@ -78,7 +79,7 @@ try {
     case 'export':
       if (!options.workspace) throw new Error('--workspace is required');
       result = await exportSeries(options); break;
-    default: throw new Error('Usage: hostctl doctor|prepare|verify-replay|export|source|inspect-unsigned-apk|verify-apk|host-release-index [--profile NAME]');
+    default: throw new Error('Usage: hostctl doctor|prepare|verify-replay|export|source|inspect-unsigned-apk|verify-apk|host-release-index|observe-upstream [--profile NAME]');
   }
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {
