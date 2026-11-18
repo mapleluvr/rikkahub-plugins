@@ -5,12 +5,17 @@ import { resolve } from 'node:path';
 import { doctor } from './doctor.mjs';
 import { exportSource } from './source.mjs';
 import { loadInputs } from './inputs.mjs';
+import { assertApkIdentity, assertApkProduct, inspectApk } from './apk.mjs';
 import { prepare, verifyReplay, exportSeries } from './workspace.mjs';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const { values, positionals } = parseArgs({
   allowPositionals: true,
-  options: Object.fromEntries(['profile', 'source', 'out', 'expected', 'workspace'].map(name => [name, { type: 'string' }])),
+  options: {
+    ...Object.fromEntries(['profile', 'source', 'out', 'expected', 'workspace', 'apk', 'aapt2', 'java', 'apksigner-jar']
+      .map(name => [name, { type: 'string' }])),
+    debug: { type: 'boolean' },
+  },
 });
 const [command] = positionals;
 const options = { repo, profile: values.profile ?? 'rikka-bfac2440', ...values };
@@ -30,6 +35,24 @@ try {
       break;
     }
     case 'source': result = await exportSource(options); break;
+    case 'inspect-unsigned-apk':
+    case 'verify-apk': {
+      const signed = command === 'verify-apk';
+      if (!signed && values.debug) throw new Error('Unsigned inspection is release-only');
+      for (const key of ['apk', 'aapt2', ...(signed ? ['java', 'apksigner-jar'] : [])]) {
+        if (!values[key]) throw new Error(`--${key} is required`);
+      }
+      const inputs = loadInputs(repo, options.profile);
+      if (!inputs.product) throw new Error('Profile has no distribution product');
+      const apk = inspectApk(resolve(values.apk), {
+        aapt2: resolve(values.aapt2), signed,
+        ...(signed ? { java: resolve(values.java), apksignerJar: resolve(values['apksigner-jar']) } : {}),
+      });
+      const assertProduct = signed ? assertApkProduct : assertApkIdentity;
+      assertProduct(apk, inputs.product, { debug: values.debug, minSdk: inputs.toolchain.minSdk });
+      result = { profile: inputs.profile, productDigest: inputs.productDigest, apk };
+      break;
+    }
     case 'prepare': result = await prepare(options); break;
     case 'verify-replay':
       if (!options.expected) throw new Error('--expected is required');
@@ -37,7 +60,7 @@ try {
     case 'export':
       if (!options.workspace) throw new Error('--workspace is required');
       result = await exportSeries(options); break;
-    default: throw new Error('Usage: hostctl doctor|prepare|verify-replay|export|source [--profile NAME] [--source PATH] [--out PATH] [--expected PATH] [--workspace PATH]');
+    default: throw new Error('Usage: hostctl doctor|prepare|verify-replay|export|source|inspect-unsigned-apk|verify-apk [--profile NAME]');
   }
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {

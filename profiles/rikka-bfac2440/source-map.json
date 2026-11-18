@@ -586,8 +586,8 @@
       "to": "vendor/rikka-plugin-host/distribution/product.json"
     },
     {
-      "from": "distribution/product.gradle.kts",
-      "to": "vendor/rikka-plugin-host/distribution/product.gradle.kts"
+      "from": "distribution/gradle-plugin/src/main/kotlin/dev/rikkahub/plugins/distribution/HostProductPlugin.kt",
+      "to": "vendor/rikka-plugin-host/distribution/gradle-plugin/src/main/kotlin/dev/rikkahub/plugins/distribution/HostProductPlugin.kt"
     },
     {
       "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/DistributionIdentityTest.kt",
