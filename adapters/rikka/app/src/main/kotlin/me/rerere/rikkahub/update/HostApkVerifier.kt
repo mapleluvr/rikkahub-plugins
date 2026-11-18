@@ -36,8 +36,9 @@ internal class HostApkVerifier(
         require(signature.isVerified && signature.isVerifiedUsingV2Scheme) { "Host APK signature verification failed" }
         val signer = signature.signerCertificates.singleOrNull()
         val android8Signer = signature.v2SchemeSigners.singleOrNull()?.certificate
-        require(signer != null && android8Signer != null &&
-            sha256(signer.encoded) == certificateSha256 && sha256(android8Signer.encoded) == certificateSha256
+        require(
+            signer != null && android8Signer != null &&
+                sha256(signer.encoded) == certificateSha256 && sha256(android8Signer.encoded) == certificateSha256
         ) { "Host APK certificate mismatch" }
         requireInstalledSigner()
         val archive = requireNotNull(packages.getPackageArchiveInfo(apk.path, 0)) { "Invalid host APK manifest" }

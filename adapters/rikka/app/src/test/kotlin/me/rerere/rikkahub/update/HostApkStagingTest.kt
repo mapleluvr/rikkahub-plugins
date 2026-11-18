@@ -34,8 +34,9 @@ class HostApkStagingTest {
                 download = { http.downloadAsset("repos/owner/repo/complete", it, bytes.size.toLong()) },
                 verify = { assertArrayEquals(bytes, it.readBytes()) },
             )
-            assertArrayEquals(bytes, good.readBytes())
-            assertTrue(good.delete())
+            assertArrayEquals(bytes, good.file.readBytes())
+            staging.discard(good)
+            assertTrue(storage.listFiles()!!.isEmpty())
 
             for (path in listOf("short", "large", "wrong-length")) {
                 var verified = false
@@ -76,7 +77,7 @@ class HostApkStagingTest {
             try {
                 withTimeout(5000) {
                     prefixSent.await()
-                    while (storage.listFiles()?.singleOrNull()?.length() != 2L) delay(10)
+                    while (storage.listFiles()?.singleOrNull { it.extension == "apk" }?.length() != 2L) delay(10)
                     call.cancelAndJoin()
                 }
                 assertTrue(storage.listFiles()!!.isEmpty())

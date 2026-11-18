@@ -3,8 +3,8 @@
   "name": "RikkaHub Plugins",
   "applicationId": "io.github.mapleluvr.rikkahub",
   "deepLinkScheme": "rikkahub-plugins",
-  "versionCode": 2,
-  "versionName": "3.3.0-plugins.2",
+  "versionCode": 3,
+  "versionName": "3.3.0-plugins.3",
   "updates": {
     "repository": "mapleluvr/rikkahub-plugin-host",
     "assetName": "host-release.json"

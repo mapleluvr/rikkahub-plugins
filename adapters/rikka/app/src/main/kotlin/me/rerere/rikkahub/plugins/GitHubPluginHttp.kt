@@ -97,11 +97,13 @@ class GitHubPluginHttp(
                 check(attempt < 5) { "Too many GitHub redirects" }
                 val next = requireNotNull(result.location?.let { target.resolve(it) }) { "Invalid GitHub redirect" }
                 require(next.username.isEmpty() && next.password.isEmpty() && next.fragment == null)
-                require(sameOrigin(next, api) || binary && next.scheme == "https" && next.port == 443 &&
-                    next.host in
-                    setOf("release-assets.githubusercontent.com", "objects.githubusercontent.com", "github.com")) {
-                    "Untrusted GitHub download redirect"
-                }
+                val trustedCdn = binary && next.scheme == "https" && next.port == 443 &&
+                    next.host in setOf(
+                        "release-assets.githubusercontent.com",
+                        "objects.githubusercontent.com",
+                        "github.com",
+                    )
+                require(sameOrigin(next, api) || trustedCdn) { "Untrusted GitHub download redirect" }
                 target = next
             } else {
                 if (result.status in setOf(403, 429)) {
@@ -119,36 +121,36 @@ class GitHubPluginHttp(
         timeoutSeconds: Long,
         consume: suspend (Response) -> T,
     ): Reply<T> = withContext(Dispatchers.IO) {
-            coroutineScope {
-                val call = http.newCall(request)
-                call.timeout().timeout(timeoutSeconds, TimeUnit.SECONDS)
-                // Cancel the blocking socket even when every IO dispatcher thread is busy.
-                val cancellation = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
-                    try {
-                        awaitCancellation()
-                    } finally {
-                        call.cancel()
-                    }
-                }
+        coroutineScope {
+            val call = http.newCall(request)
+            call.timeout().timeout(timeoutSeconds, TimeUnit.SECONDS)
+            // Cancel the blocking socket even when every IO dispatcher thread is busy.
+            val cancellation = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
                 try {
-                    call.execute().use { response ->
-                        val value = if (response.code == 200) consume(response) else null
-                        Reply(
-                            response.code,
-                            value,
-                            response.header("ETag"),
-                            response.header("Location"),
-                            response.header("Retry-After"),
-                        )
-                    }
-                } catch (error: IOException) {
-                    currentCoroutineContext().ensureActive()
-                    throw IOException("GitHub connection failed", error)
+                    awaitCancellation()
                 } finally {
-                    cancellation.cancel()
+                    call.cancel()
                 }
             }
+            try {
+                call.execute().use { response ->
+                    val value = if (response.code == 200) consume(response) else null
+                    Reply(
+                        response.code,
+                        value,
+                        response.header("ETag"),
+                        response.header("Location"),
+                        response.header("Retry-After"),
+                    )
+                }
+            } catch (error: IOException) {
+                currentCoroutineContext().ensureActive()
+                throw IOException("GitHub connection failed", error)
+            } finally {
+                cancellation.cancel()
+            }
         }
+    }
 
     private fun sameOrigin(a: HttpUrl, b: HttpUrl) = a.scheme == b.scheme && a.host == b.host && a.port == b.port
     private data class Reply<T>(

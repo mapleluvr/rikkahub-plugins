@@ -620,6 +620,18 @@
     {
       "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostApkStagingTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostApkStagingTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostApkColdStartTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostApkColdStartTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/update/HostInstallActivity.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/update/HostInstallActivity.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostApkOwnershipTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostApkOwnershipTest.kt"
     }
   ]
 }

@@ -6,4 +6,6 @@
     <string name="host_update_verifying">Verifying APK…</string>
     <string name="host_update_install">Install verified update</string>
     <string name="host_update_allow_install">Allow installing from this app</string>
+    <string name="host_update_waiting_install">Waiting for system installation confirmation</string>
+    <string name="host_update_prepare_again">Prepare installation again</string>
 </resources>

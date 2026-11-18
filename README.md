@@ -2,7 +2,7 @@
 
 RikkaHub 插件宿主维护仓库：固定上游源码、重放适配补丁、导入插件平台，构建独立发行版。
 
-P2/P3 和 P4/P5 已通过独立审查。派生 APK 已通过签名校验和与官方 APK 并装验证，当前正在验证前版升级和上游跟随。详见 [实施状态](docs/implementation-status.md) 和 [仓库设计](docs/state/plugin-patch-repository.md)。
+P2/P3 和 P4/P5 已通过独立审查。派生 APK 已通过签名、并装和正式 R8 前版升级验证，上游 profile 已推进至 ce0e3607。P6/P7 独立复审发现 APK 冷启动资源归属缺陷，当前修复安装交接并准备新冻结复审。详见 [实施状态](docs/implementation-status.md) 和 [仓库设计](docs/state/plugin-patch-repository.md)。
 
 ## 开发
 

@@ -6,4 +6,6 @@
     <string name="host_update_verifying">正在校验 APK…</string>
     <string name="host_update_install">安装已校验的更新</string>
     <string name="host_update_allow_install">允许此应用安装更新</string>
+    <string name="host_update_waiting_install">等待系统安装确认</string>
+    <string name="host_update_prepare_again">重新准备安装</string>
 </resources>
