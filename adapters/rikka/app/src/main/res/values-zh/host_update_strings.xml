@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="host_update_retry">重新检查</string>
+    <string name="host_update_download">下载 APK</string>
+    <string name="host_update_downloading">正在下载 APK…</string>
+    <string name="host_update_verifying">正在校验 APK…</string>
+    <string name="host_update_install">安装已校验的更新</string>
+    <string name="host_update_allow_install">允许此应用安装更新</string>
+</resources>

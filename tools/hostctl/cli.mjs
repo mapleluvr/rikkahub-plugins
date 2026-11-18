@@ -6,13 +6,14 @@ import { doctor } from './doctor.mjs';
 import { exportSource } from './source.mjs';
 import { loadInputs } from './inputs.mjs';
 import { assertApkIdentity, assertApkProduct, inspectApk } from './apk.mjs';
+import { writeHostReleaseIndex } from './host-release.mjs';
 import { prepare, verifyReplay, exportSeries } from './workspace.mjs';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
-    ...Object.fromEntries(['profile', 'source', 'out', 'expected', 'workspace', 'apk', 'aapt2', 'java', 'apksigner-jar']
+    ...Object.fromEntries(['profile', 'source', 'out', 'expected', 'workspace', 'apk', 'aapt2', 'java', 'apksigner-jar', 'apk-dir', 'provenance', 'notes']
       .map(name => [name, { type: 'string' }])),
     debug: { type: 'boolean' },
   },
@@ -53,6 +54,23 @@ try {
       result = { profile: inputs.profile, productDigest: inputs.productDigest, apk };
       break;
     }
+    case 'host-release-index': {
+      for (const key of ['apk-dir', 'provenance', 'notes', 'out', 'aapt2', 'java', 'apksigner-jar']) {
+        if (!values[key]) throw new Error(`--${key} is required`);
+      }
+      result = writeHostReleaseIndex({
+        inputs: loadInputs(repo, options.profile),
+        apkDir: resolve(values['apk-dir']),
+        provenance: resolve(values.provenance),
+        notesPath: resolve(values.notes),
+        out: options.out,
+        tools: {
+          aapt2: resolve(values.aapt2), java: resolve(values.java),
+          apksignerJar: resolve(values['apksigner-jar']),
+        },
+      });
+      break;
+    }
     case 'prepare': result = await prepare(options); break;
     case 'verify-replay':
       if (!options.expected) throw new Error('--expected is required');
@@ -60,7 +78,7 @@ try {
     case 'export':
       if (!options.workspace) throw new Error('--workspace is required');
       result = await exportSeries(options); break;
-    default: throw new Error('Usage: hostctl doctor|prepare|verify-replay|export|source|inspect-unsigned-apk|verify-apk [--profile NAME]');
+    default: throw new Error('Usage: hostctl doctor|prepare|verify-replay|export|source|inspect-unsigned-apk|verify-apk|host-release-index [--profile NAME]');
   }
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {

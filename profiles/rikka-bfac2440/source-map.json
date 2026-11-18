@@ -592,6 +592,34 @@
     {
       "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/DistributionIdentityTest.kt",
       "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/DistributionIdentityTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/update/HostReleaseResolver.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/update/HostReleaseResolver.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostReleaseResolverTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostReleaseResolverTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/update/HostApkVerifier.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/update/HostApkVerifier.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/update/HostApkStaging.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/kotlin/me/rerere/rikkahub/update/HostApkStaging.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/res/values/host_update_strings.xml",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/res/values/host_update_strings.xml"
+    },
+    {
+      "from": "adapters/rikka/app/src/main/res/values-zh/host_update_strings.xml",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/main/res/values-zh/host_update_strings.xml"
+    },
+    {
+      "from": "adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostApkStagingTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/test/kotlin/me/rerere/rikkahub/update/HostApkStagingTest.kt"
     }
   ]
 }

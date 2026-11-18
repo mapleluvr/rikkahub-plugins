@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="host_update_retry">Check again</string>
+    <string name="host_update_download">Download APK</string>
+    <string name="host_update_downloading">Downloading APK…</string>
+    <string name="host_update_verifying">Verifying APK…</string>
+    <string name="host_update_install">Install verified update</string>
+    <string name="host_update_allow_install">Allow installing from this app</string>
+</resources>
