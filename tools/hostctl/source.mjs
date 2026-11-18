@@ -46,7 +46,7 @@ export async function exportSource({ repo, workspace, out }) {
   const lock = JSON.parse(await readFile(join(workspace, '.git/hostctl.json'), 'utf8'));
   if (lock.schemaVersion !== 1 || lock.maintenanceCommit !== commit) throw new Error('Workspace has different maintenance inputs');
   const inputs = loadInputs(repo, lock.profile, commit);
-  for (const key of ['profileDigest', 'patchsetDigest', 'sourceMapDigest', 'toolchainDigest']) {
+  for (const key of ['profileDigest', 'patchsetDigest', 'sourceMapDigest', 'toolchainDigest', 'productDigest']) {
     if (inputs[key] !== lock[key]) throw new Error(`Workspace provenance mismatch: ${key}`);
   }
   if (inputs.config.upstream.commit !== lock.upstreamCommit) throw new Error('Workspace upstream identity mismatch');
@@ -69,7 +69,8 @@ export async function exportSource({ repo, workspace, out }) {
       schemaVersion: 1, profile: lock.profile, maintenanceCommit: commit,
       upstreamCommit: lock.upstreamCommit, upstreamUrl: inputs.config.upstream.url,
       sourceTree: lock.sourceTree, profileDigest: lock.profileDigest, patchsetDigest: lock.patchsetDigest,
-      sourceMapDigest: lock.sourceMapDigest, toolchainDigest: lock.toolchainDigest, artifacts,
+      sourceMapDigest: lock.sourceMapDigest, toolchainDigest: lock.toolchainDigest,
+      ...(lock.productDigest ? { productDigest: lock.productDigest } : {}), artifacts,
     };
     await writeFile(join(stage, 'source-provenance.json'), JSON.stringify(provenance, null, 2) + '\n');
     await assertAbsent(out);

@@ -55,6 +55,7 @@ async function assemble(inputs, { source, out }) {
     upstreamCommit: inputs.config.upstream.commit, upstreamUrl: inputs.config.upstream.url,
     profileDigest: inputs.profileDigest, patchsetDigest: inputs.patchsetDigest,
     sourceMapDigest: inputs.sourceMapDigest, toolchainDigest: inputs.toolchainDigest,
+    ...(inputs.productDigest ? { productDigest: inputs.productDigest } : {}),
     imports: inputs.imports.map(({ from, to, sha256 }) => ({ from, to, sha256 })),
     adapterBase, adapterTip: git(out, ['rev-parse', 'HEAD']),
     sourceTree: git(out, ['rev-parse', 'HEAD^{tree}']),

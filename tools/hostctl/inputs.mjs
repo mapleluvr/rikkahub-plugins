@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve, isAbsolute } from 'node:path';
+import { productInputs } from './product.mjs';
 
 export function git(cwd, args, { binary = false, input } = {}) {
   try {
@@ -70,6 +71,7 @@ export function loadInputs(repo, profile, commit = cleanCommit(repo)) {
   });
   return {
     repo: resolve(repo), profile, commit, config, patches, imports, toolchain,
+    ...productInputs(config, imports),
     profileDigest: digest(blob(repo, commit, profilePath)),
     patchsetDigest: digest(blob(repo, commit, config.series)),
     sourceMapDigest: digest(blob(repo, commit, config.sourceMap)),
