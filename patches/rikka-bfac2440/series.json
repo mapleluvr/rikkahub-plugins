@@ -244,6 +244,21 @@
         "app/src/main/res/xml/backup_rules.xml",
         "build-logic/build.gradle.kts"
       ]
+    },
+    {
+      "id": "verified-host-apk-update",
+      "file": "patches/rikka-bfac2440/0018-verified-host-apk-update.patch",
+      "sha256": "07a31c069e52776d72ca21844a008d8c77abb37a4b2175d3fe432e4b0d80395c",
+      "paths": [
+        "app/build.gradle.kts",
+        "app/src/github/AndroidManifest.xml",
+        "app/src/main/java/me/rerere/rikkahub/di/AppModule.kt",
+        "app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt",
+        "app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatDrawer.kt",
+        "app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt",
+        "app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt",
+        "app/src/main/java/me/rerere/rikkahub/utils/Version.kt"
+      ]
     }
   ]
 }

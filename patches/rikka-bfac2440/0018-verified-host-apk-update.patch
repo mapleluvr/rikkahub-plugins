@@ -1,0 +1,773 @@
+From d485b924fa80fd28b8e2c1c53304418a81875621 Mon Sep 17 00:00:00 2001
+From: Host assembly <host-assembly@example.invalid>
+Date: Wed, 18 Nov 2026 20:34:50 +0800
+Subject: [PATCH] Use verified host APK release updates
+
+Patch-Id: verified-host-apk-update
+---
+ app/build.gradle.kts                          |   1 +
+ app/src/github/AndroidManifest.xml            |   9 +
+ .../java/me/rerere/rikkahub/di/AppModule.kt   |   3 +-
+ .../rikkahub/ui/components/ui/UpdateCard.kt   | 215 +++++--------
+ .../rikkahub/ui/pages/chat/ChatDrawer.kt      |   2 +-
+ .../rerere/rikkahub/ui/pages/chat/ChatVM.kt   |   4 +-
+ .../me/rerere/rikkahub/utils/UpdateChecker.kt | 284 +++++++-----------
+ .../java/me/rerere/rikkahub/utils/Version.kt  |  90 ++++++
+ 8 files changed, 298 insertions(+), 310 deletions(-)
+ create mode 100644 app/src/main/java/me/rerere/rikkahub/utils/Version.kt
+
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 382f940f148278fefadb7e0f659a75fd7669719c..7c95ef946158fe2fe6a249758bafb65df23452e1 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -177,6 +177,7 @@ configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configu
+ dependencies {
+     implementation(project(":plugin-core"))
+     implementation(project(":plugin-runtime-quickjs"))
++    implementation("com.android.tools.build:apksig:${libs.versions.agp.get()}")
+     implementation(libs.quickjs)
+     implementation(libs.androidx.core.ktx)
+     implementation(libs.androidx.lifecycle.runtime.ktx)
+diff --git a/app/src/github/AndroidManifest.xml b/app/src/github/AndroidManifest.xml
+index 420f4f661f501bb9c066860ef7422f5ca8b7cd45..b9707d6de132fb2b1ee9c12e6a376b07c4d5433d 100644
+--- a/app/src/github/AndroidManifest.xml
++++ b/app/src/github/AndroidManifest.xml
+@@ -7,6 +7,15 @@
+     android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+     tools:ignore="ScopedStorage" />
+ 
++  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
++
++  <queries>
++    <intent>
++      <action android:name="android.intent.action.INSTALL_PACKAGE" />
++      <data android:scheme="content" />
++    </intent>
++  </queries>
++
+   <application>
+     <!-- Phone Use：只在 github 渠道声明，Play 不允许用无障碍服务做自动化。
+          Android 11 以下不启用，系统的无障碍设置里不会出现这一项 -->
+diff --git a/app/src/main/java/me/rerere/rikkahub/di/AppModule.kt b/app/src/main/java/me/rerere/rikkahub/di/AppModule.kt
+index 87c0e72dc3d4cf48b70746c726c9725a7cd8320e..d35c33c9c41ddd7fc62f955039149a2f8d017ecb 100644
+--- a/app/src/main/java/me/rerere/rikkahub/di/AppModule.kt
++++ b/app/src/main/java/me/rerere/rikkahub/di/AppModule.kt
+@@ -45,8 +45,9 @@ val appModule = module {
+ 
+     single {
+         UpdateChecker(
+-            client = get(),
++            context = get(),
+             appScope = get(),
++            token = get<RikkaPluginManager>().githubCredentials::read,
+         )
+     }
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt b/app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt
+index eb6773c7c3b9f9382dc0be61553dbdb3e27de165..5f92ada794033a144939b064a43328ab89386a72 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/components/ui/UpdateCard.kt
+@@ -1,185 +1,128 @@
+ package me.rerere.rikkahub.ui.components.ui
+ 
++import android.content.Intent
++import android.provider.Settings
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.height
+ import androidx.compose.foundation.layout.heightIn
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.rememberScrollState
+ import androidx.compose.foundation.verticalScroll
++import androidx.compose.material3.Button
+ import androidx.compose.material3.Card
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.IconButton
+-import androidx.compose.material3.ListItem
++import androidx.compose.material3.LinearProgressIndicator
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.ModalBottomSheet
+-import androidx.compose.material3.OutlinedCard
+ import androidx.compose.material3.Text
+-import androidx.compose.material3.SheetValue
+-import androidx.compose.material3.rememberBottomSheetState
++import androidx.compose.material3.TextButton
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+-import androidx.compose.runtime.remember
++import androidx.compose.runtime.saveable.rememberSaveable
+ import androidx.compose.runtime.setValue
+-import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.unit.dp
+-import androidx.compose.ui.util.fastForEach
++import androidx.core.net.toUri
++import androidx.lifecycle.compose.LifecycleResumeEffect
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+-import me.rerere.ui.toast.ToastType
+-import me.rerere.hugeicons.HugeIcons
+-import me.rerere.hugeicons.stroke.Cancel01
+-import me.rerere.hugeicons.stroke.Download01
+-import me.rerere.rikkahub.BuildConfig
+ import me.rerere.rikkahub.R
+ import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
+-import me.rerere.rikkahub.ui.context.LocalToaster
+-import me.rerere.rikkahub.ui.hooks.useThrottle
+ import me.rerere.rikkahub.ui.pages.chat.ChatVM
+-import me.rerere.rikkahub.utils.UpdateDownload
+-import me.rerere.rikkahub.utils.Version
++import me.rerere.rikkahub.utils.HostUpdateDownload
+ import me.rerere.rikkahub.utils.onError
+ import me.rerere.rikkahub.utils.onSuccess
+-import me.rerere.rikkahub.utils.toLocalDateTime
+-import kotlin.time.ExperimentalTime
+-import kotlin.time.Instant
+-import kotlin.time.toJavaInstant
+ 
+-@OptIn(ExperimentalTime::class)
+ @Composable
+ fun UpdateCard(vm: ChatVM) {
++    val checker = vm.updateChecker
+     val state by vm.updateState.collectAsStateWithLifecycle()
++    val download by checker.downloadState.collectAsStateWithLifecycle()
+     val context = LocalContext.current
+-    val toaster = LocalToaster.current
+-    state.onError {
++    state.onError { error ->
+         Card {
+-            Column(
+-                modifier = Modifier
+-                    .padding(8.dp)
+-                    .fillMaxWidth(),
+-                verticalArrangement = Arrangement.spacedBy(8.dp)
+-            ) {
+-                Text(
+-                    text = stringResource(R.string.update_card_check_failed),
+-                    style = MaterialTheme.typography.titleMedium,
+-                    color = MaterialTheme.colorScheme.error
+-                )
+-                Text(
+-                    text = it.message ?: stringResource(R.string.update_card_unknown_error),
+-                    style = MaterialTheme.typography.bodyMedium,
+-                    color = MaterialTheme.colorScheme.error
+-                )
++            Column(Modifier.padding(12.dp)) {
++                Text(stringResource(R.string.update_card_check_failed), color = MaterialTheme.colorScheme.error)
++                Text(error.message ?: stringResource(R.string.update_card_unknown_error))
++                TextButton(onClick = checker::retryCheck) { Text(stringResource(R.string.host_update_retry)) }
+             }
+         }
+     }
+-    state.onSuccess { info ->
+-        var showDetail by remember { mutableStateOf(false) }
+-        var dismissed by remember { mutableStateOf(false) }
+-        val current = remember { Version(BuildConfig.VERSION_NAME) }
+-        val latest = remember(info) { Version(info.version) }
+-        if (latest > current && !dismissed) {
+-            Card(
+-                onClick = {
+-                    showDetail = true
+-                }
+-            ) {
+-                Column(
+-                    modifier = Modifier
+-                        .padding(8.dp)
+-                        .fillMaxWidth(),
+-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+-                ) {
+-                    Row(
+-                        modifier = Modifier.fillMaxWidth(),
+-                        horizontalArrangement = Arrangement.SpaceBetween,
+-                        verticalAlignment = Alignment.CenterVertically
+-                    ) {
+-                        Text(
+-                            text = stringResource(R.string.update_card_new_version_found, info.version),
+-                            style = MaterialTheme.typography.titleMedium,
+-                            color = MaterialTheme.colorScheme.primary,
+-                            modifier = Modifier.weight(1f)
+-                        )
+-                        IconButton(onClick = { dismissed = true }) {
+-                            Icon(
+-                                imageVector = HugeIcons.Cancel01,
+-                                contentDescription = stringResource(R.string.update_card_close),
+-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+-                            )
+-                        }
+-                    }
+-                    MarkdownBlock(
+-                        content = info.changelog,
+-                        style = MaterialTheme.typography.bodySmall,
+-                        modifier = Modifier.heightIn(max = 200.dp)
++    state.onSuccess { candidate ->
++        candidate ?: return@onSuccess
++        var details by rememberSaveable(candidate.indexSha256) { mutableStateOf(false) }
++        var dismissed by rememberSaveable(candidate.indexSha256) { mutableStateOf(false) }
++        if (!dismissed) {
++            Card(onClick = { details = true }) {
++                Column(Modifier.fillMaxWidth().padding(12.dp)) {
++                    Text(
++                        stringResource(R.string.update_card_new_version_found, candidate.versionName),
++                        style = MaterialTheme.typography.titleMedium,
+                     )
++                    TextButton(onClick = { dismissed = true }) { Text(stringResource(R.string.update_card_close)) }
+                 }
+             }
+         }
+-        if (showDetail) {
+-            val downloadHandler = useThrottle<UpdateDownload>(500) { item ->
+-                vm.updateChecker.downloadUpdate(context, item)
+-                showDetail = false
+-                toaster.show(context.getString(R.string.update_card_downloading), type = ToastType.Info)
+-            }
+-            ModalBottomSheet(
+-                onDismissRequest = { showDetail = false },
+-                sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
+-            ) {
++        if (details) {
++            ModalBottomSheet(onDismissRequest = { details = false }) {
+                 Column(
+-                    modifier = Modifier
+-                        .fillMaxWidth()
+-                        .padding(horizontal = 16.dp, vertical = 32.dp),
+-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+-                    horizontalAlignment = Alignment.CenterHorizontally,
++                    modifier = Modifier.fillMaxWidth().padding(16.dp),
++                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                 ) {
+-                    Text(
+-                        text = info.version,
+-                        style = MaterialTheme.typography.headlineMedium,
+-                        color = MaterialTheme.colorScheme.primary
+-                    )
+-                    Text(
+-                        text = Instant.parse(info.publishedAt).toJavaInstant().toLocalDateTime(),
+-                        style = MaterialTheme.typography.bodySmall,
+-                        color = MaterialTheme.colorScheme.primary
+-                    )
++                    Text(candidate.versionName, style = MaterialTheme.typography.titleLarge)
+                     MarkdownBlock(
+-                        content = info.changelog,
+-                        modifier = Modifier
+-                            .fillMaxWidth()
+-                            .height(300.dp)
+-                            .verticalScroll(rememberScrollState()),
+-                        style = MaterialTheme.typography.bodyMedium
++                        content = candidate.notes,
++                        modifier = Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
++                        style = MaterialTheme.typography.bodyMedium,
+                     )
+-                    info.downloads.fastForEach { downloadItem ->
+-                        OutlinedCard(
+-                            onClick = {
+-                                downloadHandler(downloadItem)
+-                            },
+-                        ) {
+-                            ListItem(
+-                                headlineContent = {
+-                                    Text(
+-                                        text = downloadItem.name,
+-                                    )
+-                                },
+-                                supportingContent = {
+-                                    Text(
+-                                        text = downloadItem.size
+-                                    )
+-                                },
+-                                leadingContent = {
+-                                    Icon(
+-                                        imageVector = HugeIcons.Download01,
+-                                        contentDescription = null
++                    when (val current = download) {
++                        HostUpdateDownload.Downloading, HostUpdateDownload.Verifying -> {
++                            Text(stringResource(if (current == HostUpdateDownload.Downloading) {
++                                R.string.host_update_downloading
++                            } else {
++                                R.string.host_update_verifying
++                            }))
++                            LinearProgressIndicator(Modifier.fillMaxWidth())
++                            TextButton(onClick = checker::cancelDownload) { Text(stringResource(android.R.string.cancel)) }
++                        }
++
++                        is HostUpdateDownload.Ready -> if (current.candidate == candidate) {
++                            var canInstall by rememberSaveable { mutableStateOf(false) }
++                            LifecycleResumeEffect(context) {
++                                canInstall = context.packageManager.canRequestPackageInstalls()
++                                onPauseOrDispose {}
++                            }
++                            Button(onClick = {
++                                if (context.packageManager.canRequestPackageInstalls()) {
++                                    checker.install(candidate) { context.startActivity(it) }
++                                } else {
++                                    context.startActivity(
++                                        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${context.packageName}".toUri())
+                                     )
+                                 }
+-                            )
++                            }) {
++                                Text(stringResource(
++                                    if (canInstall) R.string.host_update_install else R.string.host_update_allow_install
++                                ))
++                            }
++                        } else {
++                            Button(onClick = { checker.download(candidate) }) {
++                                Text(stringResource(R.string.host_update_download))
++                            }
++                        }
++
++                        HostUpdateDownload.Idle, is HostUpdateDownload.Failed -> {
++                            if (current is HostUpdateDownload.Failed) {
++                                Text(
++                                    current.message ?: stringResource(R.string.update_card_unknown_error),
++                                    color = MaterialTheme.colorScheme.error,
++                                )
++                            }
++                            Button(onClick = { checker.download(candidate) }) {
++                                Text(stringResource(R.string.host_update_download))
++                            }
+                         }
+                     }
+                 }
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatDrawer.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatDrawer.kt
+index f06e0f142dd23a9d6b3cd0200bfc72d3a1cbc332..581ac11dc5b02debfe352934ed1b88296438485b 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatDrawer.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatDrawer.kt
+@@ -194,7 +194,7 @@ fun ChatDrawerContent(
+             modifier = Modifier.fillMaxWidth(),
+             verticalArrangement = Arrangement.spacedBy(8.dp),
+         ) {
+-            if (updateChecksEnabled && !BuildConfig.IS_PLAY_STORE) {
++            if (updateChecksEnabled && !BuildConfig.IS_PLAY_STORE && !BuildConfig.DEBUG) {
+                 UpdateCard(vm)
+             }
+ 
+diff --git a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt
+index a808e41290d56ce947464f6fc564a404410da824..e050a2587f86ce0eb1515a4067244ddab54dde7f 100644
+--- a/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt
++++ b/app/src/main/java/me/rerere/rikkahub/ui/pages/chat/ChatVM.kt
+@@ -222,9 +222,9 @@ class ChatVM(
+     }
+ 
+     // Update checker
+-    val updateState = settingsStore.settingsFlow
++    internal val updateState = settingsStore.settingsFlow
+         .map { settings ->
+-            !BuildConfig.IS_PLAY_STORE &&
++            !BuildConfig.IS_PLAY_STORE && !BuildConfig.DEBUG &&
+                 !settings.init &&
+                 settings.displaySetting.updateCheckDisabledUntilEpochMillis <= System.currentTimeMillis()
+         }
+diff --git a/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt b/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt
+index 7776245263b81157ca041c9bbfc45c110d5c9fb9..691898230abd592b2d1553522f8fb146cf61502b 100644
+--- a/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt
++++ b/app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt
+@@ -1,195 +1,139 @@
+ package me.rerere.rikkahub.utils
+ 
+-import android.app.DownloadManager
+ import android.content.Context
+-import android.os.Environment
+-import android.widget.Toast
+-import androidx.core.net.toUri
+-import kotlinx.coroutines.Dispatchers
+-import kotlinx.coroutines.flow.Flow
++import android.content.Intent
++import android.content.pm.PackageManager
++import android.os.Build
++import androidx.annotation.MainThread
++import androidx.core.content.FileProvider
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.SharingStarted
+-import kotlinx.coroutines.flow.StateFlow
+-import kotlinx.coroutines.flow.catch
+-import kotlinx.coroutines.flow.flow
+-import kotlinx.coroutines.flow.flowOn
++import kotlinx.coroutines.flow.asStateFlow
+ import kotlinx.coroutines.flow.stateIn
+-import kotlinx.serialization.Serializable
+-import kotlinx.serialization.json.Json
+-import me.rerere.common.http.await
++import kotlinx.coroutines.flow.transformLatest
++import kotlinx.coroutines.launch
+ import me.rerere.rikkahub.AppScope
+ import me.rerere.rikkahub.BuildConfig
+-import okhttp3.OkHttpClient
+-import okhttp3.Request
+-
+-private const val API_URL = "https://updates.rikka-ai.com/"
++import me.rerere.rikkahub.plugins.GitHubPluginHttp
++import me.rerere.rikkahub.update.HostApkStaging
++import me.rerere.rikkahub.update.HostApkVerifier
++import me.rerere.rikkahub.update.HostReleaseResolver
++import me.rerere.rikkahub.update.HostUpdateCandidate
++import java.io.File
++
++internal sealed interface HostUpdateDownload {
++    data object Idle : HostUpdateDownload
++    data object Downloading : HostUpdateDownload
++    data object Verifying : HostUpdateDownload
++    data class Ready(val candidate: HostUpdateCandidate) : HostUpdateDownload
++    data class Failed(val message: String?) : HostUpdateDownload
++}
+ 
+ class UpdateChecker(
+-    private val client: OkHttpClient,
+-    appScope: AppScope,
++    private val context: Context,
++    private val appScope: AppScope,
++    token: suspend () -> String?,
+ ) {
+-    private val json = Json { ignoreUnknownKeys = true }
++    private val http = GitHubPluginHttp(token)
++    private val enabled = !BuildConfig.DEBUG && !BuildConfig.IS_PLAY_STORE
++    private val verifier = HostApkVerifier(context.packageManager, context.packageName, BuildConfig.HOST_APK_CERTIFICATE_SHA256)
++    private val staging = HostApkStaging(File(context.cacheDir, "host-updates"))
++    private val refresh = MutableStateFlow(0L)
++    private val download = MutableStateFlow<HostUpdateDownload>(HostUpdateDownload.Idle)
++    internal val downloadState = download.asStateFlow()
++
++    private var prepared: File? = null
++    private var handedToInstaller = false
++    private var downloading: Job? = null
++
++    internal val updateState = refresh.transformLatest<Long, UiState<HostUpdateCandidate?>> {
++        emit(UiState.Loading)
++        try {
++            emit(UiState.Success(if (enabled) resolver().discover() else null))
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (error: Exception) {
++            emit(UiState.Error(error))
++        }
++    }.stateIn(appScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000), UiState.Loading)
+ 
+-    val updateState: StateFlow<UiState<UpdateInfo>> = checkUpdate().stateIn(
+-        scope = appScope,
+-        started = SharingStarted.Lazily,
+-        initialValue = UiState.Loading,
+-    )
++    @MainThread
++    internal fun retryCheck() {
++        refresh.value += 1
++    }
+ 
+-    private fun checkUpdate(): Flow<UiState<UpdateInfo>> = flow {
+-        emit(UiState.Loading)
+-        emit(
+-            UiState.Success(
+-                data = try {
+-                    val response = client.newCall(
+-                        Request.Builder()
+-                            .url(API_URL)
+-                            .get()
+-                            .addHeader(
+-                                "User-Agent",
+-                                "RikkaHub ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}"
+-                            )
+-                            .build()
+-                    ).await()
+-                    if (response.isSuccessful) {
+-                        json.decodeFromString<UpdateInfo>(response.body.string())
+-                    } else {
+-                        throw Exception("Failed to fetch update info")
++    @MainThread
++    internal fun download(candidate: HostUpdateCandidate) {
++        if (!enabled || downloading?.isCompleted == false || updateState.value != UiState.Success(candidate)) return
++        discardPrepared()
++        download.value = HostUpdateDownload.Downloading
++        downloading = appScope.launch {
++            try {
++                val path = resolver().confirmDownload(candidate)
++                prepared = staging.prepare(
++                    download = { http.downloadAsset(path, it, candidate.artifact.sizeBytes) },
++                    verify = {
++                        download.value = HostUpdateDownload.Verifying
++                        verifier.verify(it, candidate)
+                     }
+-                } catch (e: Exception) {
+-                    throw Exception("Failed to fetch update info", e)
+-                }
+-            )
+-        )
+-    }.catch {
+-        emit(UiState.Error(it))
+-    }.flowOn(Dispatchers.IO)
+-
+-    fun downloadUpdate(context: Context, download: UpdateDownload) {
+-        runCatching {
+-            val request = DownloadManager.Request(download.url.toUri()).apply {
+-                // 设置下载时通知栏的标题和描述
+-                setTitle(download.name)
+-                setDescription("正在下载更新包...")
+-                // 下载完成后通知栏可见
+-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+-                // 允许在移动网络和WiFi下下载
+-                setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
+-                // 设置文件保存路径
+-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, download.name)
+-                // 允许下载的文件类型
+-                setMimeType("application/vnd.android.package-archive")
++                )
++                download.value = HostUpdateDownload.Ready(candidate)
++            } catch (cancelled: CancellationException) {
++                download.value = HostUpdateDownload.Idle
++                throw cancelled
++            } catch (error: Exception) {
++                download.value = HostUpdateDownload.Failed(error.message)
+             }
+-            // 获取系统的DownloadManager
+-            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+-            dm.enqueue(request)
+-            // 你可以保存返回的downloadId到本地，以便后续查询下载进度或状态
+-        }.onFailure {
+-            Toast.makeText(context, "Failed to update", Toast.LENGTH_SHORT).show()
+-            context.openUrl(download.url) // 跳转到下载页面
+         }
+     }
+-}
+-
+-@Serializable
+-data class UpdateDownload(
+-    val name: String,
+-    val url: String,
+-    val size: String
+-)
+ 
+-@Serializable
+-data class UpdateInfo(
+-    val version: String,
+-    val publishedAt: String,
+-    val changelog: String,
+-    val downloads: List<UpdateDownload>
+-)
+-
+-/**
+- * 版本号值类，封装版本号字符串并提供比较功能
+- *
+- * 支持完整的 SemVer 规范：MAJOR.MINOR.PATCH[-prerelease][+build]
+- * - 预发布版本优先级低于正式版：1.0.0-alpha < 1.0.0
+- * - 预发布标识符按段逐个比较：数字按数值比较，字符串按字典序比较
+- * - 预发布标识符优先级：alpha < beta < rc（通过字典序自然满足）
+- * - build metadata（+号后面的部分）不影响优先级比较
+- */
+-@JvmInline
+-value class Version(val value: String) : Comparable<Version> {
+-
+-    private fun parse(): ParsedVersion {
+-        // 去掉 build metadata（+号后面的部分）
+-        val withoutBuild = value.split("+").first()
+-        // 分离主版本号和预发布标识符
+-        val hyphenIndex = withoutBuild.indexOf('-')
+-        val (coreStr, prereleaseStr) = if (hyphenIndex >= 0) {
+-            withoutBuild.substring(0, hyphenIndex) to withoutBuild.substring(hyphenIndex + 1)
+-        } else {
+-            withoutBuild to null
+-        }
+-        val core = coreStr.split(".").map { it.toIntOrNull() ?: 0 }
+-        val prerelease = prereleaseStr?.split(".")
+-        return ParsedVersion(core, prerelease)
++    @MainThread
++    internal fun cancelDownload() {
++        downloading?.cancel()
+     }
+ 
+-    override fun compareTo(other: Version): Int {
+-        val a = this.parse()
+-        val b = other.parse()
+-
+-        // 先比较主版本号
+-        val maxLen = maxOf(a.core.size, b.core.size)
+-        for (i in 0 until maxLen) {
+-            val ap = if (i < a.core.size) a.core[i] else 0
+-            val bp = if (i < b.core.size) b.core[i] else 0
+-            if (ap != bp) return ap.compareTo(bp)
+-        }
+-
+-        // 主版本号相同时比较预发布标识符
+-        // 有预发布标识符的版本优先级低于没有的：1.0.0-alpha < 1.0.0
+-        return when {
+-            a.prerelease == null && b.prerelease == null -> 0
+-            a.prerelease != null && b.prerelease == null -> -1
+-            a.prerelease == null && b.prerelease != null -> 1
+-            else -> comparePrerelease(a.prerelease!!, b.prerelease!!)
++    /** Called from the foreground. The system Activity owns the installation confirmation. */
++    @MainThread
++    internal fun install(candidate: HostUpdateCandidate, launch: (Intent) -> Unit) {
++        if (!enabled || download.value != HostUpdateDownload.Ready(candidate)) return
++        try {
++            val apk = requireNotNull(prepared)
++            check(apk.isFile && verifier.installedCode() < candidate.versionCode) { "This update is no longer available" }
++            launch(installIntent(context, apk))
++            // The installer can open this grant after startActivity returns.
++            handedToInstaller = true
++        } catch (error: Exception) {
++            discardPrepared()
++            download.value = HostUpdateDownload.Failed(error.message)
+         }
+     }
+ 
+-    companion object {
+-        fun compare(version1: String, version2: String): Int {
+-            return Version(version1).compareTo(Version(version2))
+-        }
+-
+-        private fun comparePrerelease(a: List<String>, b: List<String>): Int {
+-            val maxLen = maxOf(a.size, b.size)
+-            for (i in 0 until maxLen) {
+-                // 字段少的优先级更低：1.0.0-alpha < 1.0.0-alpha.1
+-                if (i >= a.size) return -1
+-                if (i >= b.size) return 1
+-
+-                val aNum = a[i].toIntOrNull()
+-                val bNum = b[i].toIntOrNull()
+-
+-                val cmp = when {
+-                    // 都是字：按数值比较
+-                    aNum != null && bNum != null -> aNum.compareTo(bNum)
+-                    // 数字优先级低于字符串
+-                    aNum != null -> -1
+-                    bNum != null -> 1
+-                    // 都是字符串：按字典序比较
+-                    else -> a[i].compareTo(b[i])
+-                }
+-                if (cmp != 0) return cmp
+-            }
+-            return 0
+-        }
++    private fun discardPrepared() {
++        if (!handedToInstaller) prepared?.delete()
++        prepared = null
++        handedToInstaller = false
+     }
+-}
+ 
+-private data class ParsedVersion(
+-    val core: List<Int>,
+-    val prerelease: List<String>?,
+-)
++    private fun resolver() = HostReleaseResolver(
++        transport = http,
++        repository = BuildConfig.HOST_UPDATE_REPOSITORY,
++        indexName = BuildConfig.HOST_UPDATE_INDEX_ASSET,
++        applicationId = context.packageName,
++        certificateSha256 = BuildConfig.HOST_APK_CERTIFICATE_SHA256,
++        installedVersionCode = verifier.installedCode().toInt(),
++        supportedAbis = Build.SUPPORTED_ABIS.toList(),
++    )
++}
+ 
+-// 扩展操作符函数，使比较更直观
+-operator fun String.compareTo(other: Version): Int = Version(this).compareTo(other)
+-operator fun Version.compareTo(other: String): Int = this.compareTo(Version(other))
++@Suppress("DEPRECATION") // The platform confirmation Activity accepts a single content URI.
++internal fun installIntent(context: Context, apk: File): Intent {
++    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
++    val intent = Intent(Intent.ACTION_INSTALL_PACKAGE, uri)
++        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
++    val installer = requireNotNull(
++        context.packageManager.resolveActivity(intent, PackageManager.MATCH_SYSTEM_ONLY or PackageManager.MATCH_DEFAULT_ONLY)
++    ) { "System package installer unavailable" }
++    return intent.setClassName(installer.activityInfo.packageName, installer.activityInfo.name)
++}
+diff --git a/app/src/main/java/me/rerere/rikkahub/utils/Version.kt b/app/src/main/java/me/rerere/rikkahub/utils/Version.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..a1df80080cdc2a60ce4f16188b0b03c8cbc5ee31
+--- /dev/null
++++ b/app/src/main/java/me/rerere/rikkahub/utils/Version.kt
+@@ -0,0 +1,90 @@
++package me.rerere.rikkahub.utils
++
++/**
++ * 版本号值类，封装版本号字符串并提供比较功能
++ *
++ * 支持完整的 SemVer 规范：MAJOR.MINOR.PATCH[-prerelease][+build]
++ * - 预发布版本优先级低于正式版：1.0.0-alpha < 1.0.0
++ * - 预发布标识符按段逐个比较：数字按数值比较，字符串按字典序比较
++ * - 预发布标识符优先级：alpha < beta < rc（通过字典序自然满足）
++ * - build metadata（+号后面的部分）不影响优先级比较
++ */
++@JvmInline
++value class Version(val value: String) : Comparable<Version> {
++
++    private fun parse(): ParsedVersion {
++        // 去掉 build metadata（+号后面的部分）
++        val withoutBuild = value.split("+").first()
++        // 分离主版本号和预发布标识符
++        val hyphenIndex = withoutBuild.indexOf('-')
++        val (coreStr, prereleaseStr) = if (hyphenIndex >= 0) {
++            withoutBuild.substring(0, hyphenIndex) to withoutBuild.substring(hyphenIndex + 1)
++        } else {
++            withoutBuild to null
++        }
++        val core = coreStr.split(".").map { it.toIntOrNull() ?: 0 }
++        val prerelease = prereleaseStr?.split(".")
++        return ParsedVersion(core, prerelease)
++    }
++
++    override fun compareTo(other: Version): Int {
++        val a = this.parse()
++        val b = other.parse()
++
++        // 先比较主版本号
++        val maxLen = maxOf(a.core.size, b.core.size)
++        for (i in 0 until maxLen) {
++            val ap = if (i < a.core.size) a.core[i] else 0
++            val bp = if (i < b.core.size) b.core[i] else 0
++            if (ap != bp) return ap.compareTo(bp)
++        }
++
++        // 主版本号相同时比较预发布标识符
++        // 有预发布标识符的版本优先级低于没有的：1.0.0-alpha < 1.0.0
++        return when {
++            a.prerelease == null && b.prerelease == null -> 0
++            a.prerelease != null && b.prerelease == null -> -1
++            a.prerelease == null && b.prerelease != null -> 1
++            else -> comparePrerelease(a.prerelease!!, b.prerelease!!)
++        }
++    }
++
++    companion object {
++        fun compare(version1: String, version2: String): Int {
++            return Version(version1).compareTo(Version(version2))
++        }
++
++        private fun comparePrerelease(a: List<String>, b: List<String>): Int {
++            val maxLen = maxOf(a.size, b.size)
++            for (i in 0 until maxLen) {
++                // 字段少的优先级更低：1.0.0-alpha < 1.0.0-alpha.1
++                if (i >= a.size) return -1
++                if (i >= b.size) return 1
++
++                val aNum = a[i].toIntOrNull()
++                val bNum = b[i].toIntOrNull()
++
++                val cmp = when {
++                    // 都是字：按数值比较
++                    aNum != null && bNum != null -> aNum.compareTo(bNum)
++                    // 数字优先级低于字符串
++                    aNum != null -> -1
++                    bNum != null -> 1
++                    // 都是字符串：按字典序比较
++                    else -> a[i].compareTo(b[i])
++                }
++                if (cmp != 0) return cmp
++            }
++            return 0
++        }
++    }
++}
++
++private data class ParsedVersion(
++    val core: List<Int>,
++    val prerelease: List<String>?,
++)
++
++// 扩展操作符函数，使比较更直观
++operator fun String.compareTo(other: Version): Int = Version(this).compareTo(other)
++operator fun Version.compareTo(other: String): Int = this.compareTo(Version(other))
