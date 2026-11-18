@@ -259,6 +259,14 @@
         "app/src/main/java/me/rerere/rikkahub/utils/UpdateChecker.kt",
         "app/src/main/java/me/rerere/rikkahub/utils/Version.kt"
       ]
+    },
+    {
+      "id": "plugin-feature-preference-contract",
+      "file": "patches/rikka-github/0019-plugin-feature-preference-contract.patch",
+      "sha256": "65570032477b30aa0a0ac531703f8c754f8f0c0c59c35d11c6cfaa177c70e500",
+      "paths": [
+        "app/src/test/java/me/rerere/rikkahub/data/datastore/SettingsFieldsTest.kt"
+      ]
     }
   ]
 }

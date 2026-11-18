@@ -1,0 +1,47 @@
+From fb6a779be1a69752c3c6ff589f5aaf7677a1cb6f Mon Sep 17 00:00:00 2001
+From: RikkaHub Plugin Host <hostctl@localhost>
+Date: Wed, 18 Nov 2026 23:10:45 +0800
+Subject: [PATCH] Check persisted plugin feature preferences after upstream
+ replay
+
+Patch-Id: plugin-feature-preference-contract
+---
+ .../me/rerere/rikkahub/data/datastore/SettingsFieldsTest.kt   | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/app/src/test/java/me/rerere/rikkahub/data/datastore/SettingsFieldsTest.kt b/app/src/test/java/me/rerere/rikkahub/data/datastore/SettingsFieldsTest.kt
+index 2a796a55d3c6e401910a79823f9a61dfd95688ec..1e0d74e9e129cf08d6f1f455178698f226d6abec 100644
+--- a/app/src/test/java/me/rerere/rikkahub/data/datastore/SettingsFieldsTest.kt
++++ b/app/src/test/java/me/rerere/rikkahub/data/datastore/SettingsFieldsTest.kt
+@@ -56,6 +56,7 @@ class SettingsFieldsTest {
+         assertEquals(9090, stored["web_server_port"])
+         assertEquals(1.5f, stored["default_tts_playback_speed"])
+         assertEquals(0.9f, stored["auto_compress_threshold"])
++        assertEquals(setOf("builtin.context"), stored["disabled_plugin_features"])
+         assertEquals("title", stored["title_prompt"])
+         assertEquals("00000000-0000-0000-0000-000000000001", stored["chat_model"])
+         assertEquals("LOW", stored["fast_model_reasoning_level"])
+@@ -76,6 +77,7 @@ class SettingsFieldsTest {
+         assertEquals(null, settings.selectedASRProviderId)
+         assertEquals(null, settings.memoryModelId)
+         assertEquals(true, settings.dynamicColor)
++        assertEquals(emptySet<String>(), settings.disabledPluginFeatures)
+         assertEquals(8080, settings.webServerPort)
+     }
+ 
+@@ -136,6 +138,7 @@ private val SAMPLE = Settings(
+     suggestionPrompt = "suggestion",
+     ocrModelId = id(5),
+     ocrPrompt = "ocr",
++    disabledPluginFeatures = setOf("builtin.context"),
+     enableAutoCompress = false,
+     autoCompressThreshold = 0.9f,
+     assistantId = id(20),
+@@ -194,6 +197,7 @@ private val STORED_KEYS = setOf(
+     "suggestion_prompt",
+     "ocr_model",
+     "ocr_prompt",
++    "disabled_plugin_features",
+     "enable_auto_compress",
+     "auto_compress_threshold",
+     "providers",
