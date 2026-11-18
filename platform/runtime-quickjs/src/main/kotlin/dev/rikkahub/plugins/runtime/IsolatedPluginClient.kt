@@ -10,7 +10,9 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import android.os.RemoteException
 import dev.rikkahub.plugins.core.ExecutionAuthority
+import dev.rikkahub.plugins.core.ExecutionResultUnavailable
 import dev.rikkahub.plugins.core.PluginArchive
 import dev.rikkahub.plugins.core.PluginContract
 import dev.rikkahub.plugins.core.VerifiedPluginPackage
@@ -19,7 +21,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -52,6 +57,8 @@ class IsolatedPluginClient private constructor(
     private val closing = Mutex()
 
     @Volatile private var closed = false
+
+    @Volatile private var disconnection: ExecutionResultUnavailable? = null
     private var bound = false
     private var closeConfirmed = false
     var processId: Int = -1
@@ -74,10 +81,11 @@ class IsolatedPluginClient private constructor(
         override fun onBindingDied(name: ComponentName) = failed()
         override fun onNullBinding(name: ComponentName) = failed()
         private fun failed() {
+            val error = ExecutionResultUnavailable("Plugin runtime disconnected; uncertain work must be reconciled")
+            disconnection = error
             closed = true
-            val error = IllegalStateException("Plugin runtime disconnected; uncertain work must be reconciled")
             connected.completeExceptionally(error)
-            pending.values.forEach { it.cancel(CancellationException(error.message, error)) }
+            pending.values.forEach { it.close(error) }
         }
     }
 
@@ -123,7 +131,18 @@ class IsolatedPluginClient private constructor(
             result
         } catch (error: Throwable) {
             close()
-            throw error
+            rethrowRuntimeFailure(error)
+        }
+    }
+
+    private suspend fun rethrowRuntimeFailure(error: Throwable): Nothing {
+        // OPEN and CALL have internal deadlines; only the actual caller can supply a Stop signal.
+        // Recheck after cleanup as Stop may have won while the runtime was being drained.
+        currentCoroutineContext().ensureActive()
+        throw if (error is TimeoutCancellationException) {
+            ExecutionResultUnavailable("Plugin runtime request timed out; uncertain work must be reconciled", error)
+        } else {
+            error
         }
     }
 
@@ -150,6 +169,7 @@ class IsolatedPluginClient private constructor(
 
     private fun checkAuthorized() {
         execution?.check()
+        disconnection?.let { throw it }
         check(!closed && authorized(lease, pkg.manifest.capabilities)) { "Plugin permission or lease was revoked" }
     }
 
@@ -177,15 +197,25 @@ class IsolatedPluginClient private constructor(
                     }
                 }
                 // Payload preparation and durable admission stay outside the lock; CLOSE is cleanup only.
-                if (action == RuntimeTransport.CLOSE || execution == null) {
-                    remote.send(message)
-                } else {
-                    execution.dispatch { remote.send(message) }
+                try {
+                    if (action == RuntimeTransport.CLOSE || execution == null) {
+                        remote.send(message)
+                    } else {
+                        execution.dispatch { remote.send(message) }
+                    }
+                } catch (error: RemoteException) {
+                    throw ExecutionResultUnavailable(
+                        "Plugin runtime transport failed; uncertain work must be reconciled",
+                        error
+                    )
                 }
             }
             val bundle = response.receive()
             try {
-                bundle.getString("error")?.let { error(it) }
+                bundle.getString("error")?.let {
+                    if (bundle.getBoolean(RuntimeTransport.RESULT_UNAVAILABLE)) throw ExecutionResultUnavailable(it)
+                    error(it)
+                }
                 RuntimeTransport.incoming(RuntimeTransport.descriptor(bundle)).toString(Charsets.UTF_8)
             } finally {
                 RuntimeTransport.discard(bundle)
@@ -232,7 +262,7 @@ class IsolatedPluginClient private constructor(
                 return client
             } catch (error: Throwable) {
                 client.close()
-                throw error
+                client.rethrowRuntimeFailure(error)
             }
         }
     }

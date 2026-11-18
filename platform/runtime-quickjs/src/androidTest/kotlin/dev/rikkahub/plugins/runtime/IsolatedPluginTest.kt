@@ -2,16 +2,20 @@ package dev.rikkahub.plugins.runtime
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
+import android.os.IInterface
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import android.os.Parcel
 import android.os.Process
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.rikkahub.plugins.core.ExecutionResultUnavailable
 import dev.rikkahub.plugins.core.PluginArchive
 import dev.rikkahub.plugins.core.PluginContract
 import dev.rikkahub.plugins.protocol.PackageLease
@@ -19,11 +23,15 @@ import dev.rikkahub.plugins.protocol.PluginManifest
 import dev.rikkahub.plugins.protocol.PluginOperationDeclaration
 import dev.rikkahub.plugins.protocol.PluginPanelDeclaration
 import dev.rikkahub.plugins.protocol.PluginToolDeclaration
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -35,14 +43,138 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 class IsolatedPluginTest {
+    @Test fun lostRealOpenReplyIsAnInternalDeadlineNotCallerStop() = runBlocking {
+        val context = DropOpenReplyContext(InstrumentationRegistry.getInstrumentation().targetContext)
+        val bytes = readyArchive()
+        val pkg = PluginArchive.decode(bytes)
+        val failure = runCatching {
+            withTimeout(25_000) {
+                IsolatedPluginClient.prepare(context, bytes, PackageLease(pkg.manifest.id, pkg.hash, 1)) { _, _ ->
+                    true
+                }
+                    .close()
+            }
+        }.exceptionOrNull()
+        assertTrue(
+            "The real Service must have finished OPEN before its reply was discarded",
+            context.openReply.isCompleted
+        )
+        assertTrue(
+            "An internal OPEN deadline must not cancel the logical caller: $failure",
+            failure is ExecutionResultUnavailable
+        )
+        assertTrue(currentCoroutineContext().isActive)
+        assertTrue("The failed prepare must unbind after CLOSE cleanup", context.connections.isEmpty())
+    }
+
+    @Test fun actualCallerStopWhileRealOpenReplyIsLostRemainsCancellation() = runBlocking {
+        val context = DropOpenReplyContext(InstrumentationRegistry.getInstrumentation().targetContext)
+        val bytes = readyArchive()
+        val pkg = PluginArchive.decode(bytes)
+        val failure = CompletableDeferred<Throwable>()
+        val call = async(Dispatchers.Default) {
+            try {
+                IsolatedPluginClient.prepare(context, bytes, PackageLease(pkg.manifest.id, pkg.hash, 1)) { _, _ ->
+                    true
+                }
+                    .close()
+            } catch (error: Throwable) {
+                failure.complete(error)
+                throw error
+            }
+        }
+        try {
+            withTimeout(5_000) { context.openReply.await() }
+            withTimeout(6_000) { call.cancelAndJoin() }
+            assertTrue(failure.await() is CancellationException)
+            assertFalse(failure.await() is ExecutionResultUnavailable)
+            assertTrue("Caller Stop must unbind after CLOSE cleanup", context.connections.isEmpty())
+        } finally {
+            call.cancelAndJoin()
+        }
+    }
+
+    private fun readyArchive() = archive("""
+        globalThis.rikkaPlugin = rk => {
+          rk.registerOperation('report', () => ({artifacts:[]}));
+          rk.registerPanel('main', () => ({type:'text', text:'ready'}));
+        };
+    """.trimIndent())
+
+    /** Forward real OPEN and CLOSE unchanged except for deliberately losing the OPEN acknowledgment. */
+    private class DropOpenReplyContext(base: Context) : ContextWrapper(base) {
+        val openReply = CompletableDeferred<Unit>()
+        val connections = ConcurrentHashMap<ServiceConnection, ServiceConnection>()
+        override fun getApplicationContext(): Context = this
+        override fun bindService(intent: Intent, connection: ServiceConnection, flags: Int): Boolean {
+            val observer = object : ServiceConnection {
+                override fun onServiceConnected(name: ComponentName, service: IBinder) {
+                    connection.onServiceConnected(name, object : IBinder by service {
+                        override fun queryLocalInterface(descriptor: String): IInterface? = null
+                        override fun transact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+                            if (code !=
+                                IBinder.FIRST_CALL_TRANSACTION) {
+                                return service.transact(code, data, reply, flags)
+                            }
+                            val wire = Parcel.obtain()
+                            var decoded: Message? = null
+                            try {
+                                wire.appendFrom(data, 0, data.dataSize())
+                                wire.setDataPosition(0)
+                                wire.enforceInterface("android.os.IMessenger")
+                                check(wire.readInt() == 1)
+                                val message = Message.CREATOR.createFromParcel(wire)
+                                decoded = message
+                                if (message.what !=
+                                    RuntimeTransport.OPEN) {
+                                    return service.transact(code, data, reply, flags)
+                                }
+                                val target = checkNotNull(message.replyTo)
+                                val request = message.arg1
+                                message.replyTo = Messenger(Handler(Looper.getMainLooper()) { acknowledgment ->
+                                    if (acknowledgment.arg1 == request) {
+                                        RuntimeTransport.discard(acknowledgment.data)
+                                        openReply.complete(Unit)
+                                    } else {
+                                        target.send(acknowledgment)
+                                    }
+                                    true
+                                })
+                                wire.setDataSize(0)
+                                wire.setDataPosition(0)
+                                wire.writeInterfaceToken("android.os.IMessenger")
+                                wire.writeInt(1)
+                                message.writeToParcel(wire, 0)
+                                wire.setDataPosition(0)
+                                return service.transact(code, wire, reply, flags)
+                            } finally {
+                                decoded?.let { RuntimeTransport.discard(it.data) }
+                                wire.recycle()
+                            }
+                        }
+                    })
+                }
+                override fun onServiceDisconnected(name: ComponentName) = connection.onServiceDisconnected(name)
+                override fun onBindingDied(name: ComponentName) = connection.onBindingDied(name)
+                override fun onNullBinding(name: ComponentName) = connection.onNullBinding(name)
+            }
+            connections[connection] = observer
+            return super.bindService(intent, observer, flags).also { if (!it) connections.remove(connection) }
+        }
+        override fun unbindService(connection: ServiceConnection) =
+            super.unbindService(checkNotNull(connections.remove(connection)))
+    }
+
     @Test fun isolatedUidKeepsItsCallbacksAndTransfersLargeResultsThenCloses() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val bytes =

@@ -19,6 +19,9 @@ internal object RuntimeTransport {
     const val OPEN = 1
     const val CALL = 2
     const val CLOSE = 3
+
+    // A canceled isolated evaluation has no confirmed result; this is never a user Stop signal.
+    const val RESULT_UNAVAILABLE = "result-unavailable"
     const val LIMIT = 6 * 1024 * 1024
 
     /** No descriptor crosses a cancellable dispatcher boundary without an owner. */

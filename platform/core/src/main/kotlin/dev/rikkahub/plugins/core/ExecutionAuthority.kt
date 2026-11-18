@@ -13,6 +13,9 @@ data class ExecutionBinding(
 
 class ExecutionAuthorizationRevoked : IllegalStateException("Owning execution authorization was revoked")
 
+/** A host dependency lost the result; this is not cancellation of the owning logical run. */
+class ExecutionResultUnavailable(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+
 /**
  * Revocation and the final non-suspending dispatch share one lock. Payload/FD preparation and durable
  * admission happen outside it. Owners are child scopes, so revocation drains work without stopping its logical run.

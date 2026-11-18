@@ -10,6 +10,7 @@ import android.os.Message
 import android.os.Messenger
 import android.os.ParcelFileDescriptor
 import android.os.Process
+import dev.rikkahub.plugins.core.ExecutionResultUnavailable
 import dev.rikkahub.plugins.core.PluginArchive
 import dev.rikkahub.plugins.core.PluginContract
 import dev.rikkahub.plugins.protocol.PackageLease
@@ -48,7 +49,7 @@ class IsolatedPluginService : Service() {
         var context: JsonElement = JsonNull
     }
 
-    private val incoming = Messenger(Handler(Looper.getMainLooper()) { message ->
+    private val incoming: Messenger = Messenger(Handler(Looper.getMainLooper()) { message ->
         val handle = message.data.getString("handle")
         val response = message.replyTo
         val request = message.arg1
@@ -161,11 +162,17 @@ class IsolatedPluginService : Service() {
                 arg1 = request
                 data = Bundle().apply {
                     if (pipe != null) putParcelable("payload", pipe[0])
-                    result.exceptionOrNull()?.let { putString("error", (it.message ?: "Plugin failed").take(1024)) }
+                    result.exceptionOrNull()?.let {
+                        putString("error", (it.message ?: "Plugin failed").take(1024))
+                        putBoolean(
+                            RuntimeTransport.RESULT_UNAVAILABLE,
+                            it is kotlinx.coroutines.CancellationException || it is ExecutionResultUnavailable
+                        )
+                    }
                 }
             })
             pipe?.get(0)?.close()
-            if (pipe != null) RuntimeTransport.writeResponse(pipe[1], bytes!!)
+            if (pipe != null) RuntimeTransport.writeResponse(pipe[1], bytes)
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (_: Exception) {

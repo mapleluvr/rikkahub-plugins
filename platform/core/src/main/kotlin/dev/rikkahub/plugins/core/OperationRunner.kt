@@ -79,7 +79,7 @@ class OperationRunner(definitions: List<OperationDefinition>) {
                 validateModel,
             )
             val modelRequests: ModelRequests = ownedModels
-            var unfinishedModels = false
+            val unfinishedModels: Boolean
             val result = try {
                 operation.execute(OperationContext(
                     call,

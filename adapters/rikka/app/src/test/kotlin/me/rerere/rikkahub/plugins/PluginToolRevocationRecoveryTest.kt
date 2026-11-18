@@ -2,6 +2,7 @@ package me.rerere.rikkahub.plugins
 
 import dev.rikkahub.plugins.core.ExecutionAuthority
 import dev.rikkahub.plugins.core.ExecutionBinding
+import dev.rikkahub.plugins.core.ExecutionResultUnavailable
 import dev.rikkahub.plugins.protocol.PackageLease
 import dev.rikkahub.plugins.protocol.RunStatus
 import kotlinx.coroutines.CoroutineScope
@@ -48,6 +49,16 @@ class PluginToolRevocationRecoveryTest {
     @Test
     fun rolledBackRevocationStillCannotConfirmOrContinueAnInterruptedTool() = runBlocking {
         verifyRevocation(afterDispatch = false, rolledBack = true)
+    }
+
+    @Test
+    fun transportLossBeforeDispatchCannotBecomeAConfirmedToolResult() = runBlocking {
+        verifyRevocation(afterDispatch = false, transportDisconnected = true)
+    }
+
+    @Test
+    fun transportLossAfterDispatchPreservesOriginalAuthorizedRunAcrossRecovery() = runBlocking {
+        verifyRevocation(afterDispatch = true, transportDisconnected = true)
     }
 
     @Test
@@ -100,7 +111,11 @@ class PluginToolRevocationRecoveryTest {
         assertEquals(2, provider.calls)
     }
 
-    private suspend fun CoroutineScope.verifyRevocation(afterDispatch: Boolean, rolledBack: Boolean = false) {
+    private suspend fun CoroutineScope.verifyRevocation(
+        afterDispatch: Boolean,
+        rolledBack: Boolean = false,
+        transportDisconnected: Boolean = false,
+    ) {
         val initial = conversation()
         val store = FakeConversationStore(initial)
         val session = open(initial, store)
@@ -117,6 +132,7 @@ class PluginToolRevocationRecoveryTest {
         val tool = Tool(name = "effect", description = "effect", execute = {
             // Exercise the real core revocation signal, not a fabricated tool-error exception.
             if (afterDispatch) scope.dispatch { effects++ }
+            if (transportDisconnected) throw ExecutionResultUnavailable("Plugin runtime disconnected")
             authorized = false
             authority.beginRevocation(leases.first().pluginId)
             if (rolledBack) {
@@ -142,6 +158,13 @@ class PluginToolRevocationRecoveryTest {
             assertNull("Do not claim the interrupted tool finished", part.finishedAt)
             assertTrue(part.output.isEmpty())
             assertEquals(1, provider.calls)
+            if (transportDisconnected) {
+                assertTrue("Transport loss must not pretend the original leases were revoked", authorized)
+                assertFalse(
+                    "host.package-authorization" in
+                        session.state.value.executionLedger().runs.getValue(run.ref.runId).state.gates
+                )
+            }
             assertTrue(
                 "The live run must wait even if persistent revocation rolled back",
                 "host.recovery" in session.state.value.executionLedger().runs.getValue(run.ref.runId).state.gates

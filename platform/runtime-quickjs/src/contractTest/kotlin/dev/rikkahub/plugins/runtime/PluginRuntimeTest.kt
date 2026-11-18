@@ -1,11 +1,16 @@
 package dev.rikkahub.plugins.runtime
 
+import com.dokar.quickjs.QuickJsInterruptedException
+import dev.rikkahub.plugins.core.ExecutionResultUnavailable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -15,6 +20,42 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PluginRuntimeTest {
+    @Test(timeout = 15_000)
+    fun rawNativeDeadlineCannotBecomeAConfirmedToolFailure() = runBlocking {
+        repeat(50) {
+            val runtime = PluginRuntime(timeoutMillis = 50) { "unused" }
+            try {
+                val error = runCatching { runtime.evaluate("while (true) { }") }.exceptionOrNull()
+                assertTrue(
+                    "A real evaluation deadline is not a confirmed script failure: $error",
+                    error is CancellationException || error is ExecutionResultUnavailable
+                )
+                assertTrue("The caller was not stopped", currentCoroutineContext().isActive)
+            } finally {
+                runtime.close()
+            }
+        }
+    }
+
+    @Test(timeout = 15_000)
+    fun ordinaryScriptErrorUsingInterruptedWordsIsNotAHostDeadline() = runBlocking {
+        val runtime = PluginRuntime { "unused" }
+        try {
+            val error = runCatching {
+                runtime.evaluate("throw new InternalError('interrupted');")
+            }.exceptionOrNull()
+            assertTrue(error != null)
+            assertFalse(
+                "A plugin-authored InternalError must not impersonate the native watchdog: $error",
+                error is CancellationException || error is ExecutionResultUnavailable ||
+                    error is QuickJsInterruptedException
+            )
+            assertTrue(currentCoroutineContext().isActive)
+        } finally {
+            runtime.close()
+        }
+    }
+
     @Test(timeout = 15_000)
     fun closingWaitsForHostCleanup() =
         runBlocking {

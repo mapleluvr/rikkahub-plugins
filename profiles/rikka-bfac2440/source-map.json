@@ -544,6 +544,10 @@
     {
       "from": "platform/core/src/test/kotlin/dev/rikkahub/plugins/core/ExecutionAuthorityTest.kt",
       "to": "vendor/rikka-plugin-host/platform/core/src/test/kotlin/dev/rikkahub/plugins/core/ExecutionAuthorityTest.kt"
+    },
+    {
+      "from": "adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolServiceInterruptionTest.kt",
+      "to": "vendor/rikka-plugin-host/adapters/rikka/app/src/androidTest/kotlin/me/rerere/rikkahub/plugins/PluginToolServiceInterruptionTest.kt"
     }
   ]
 }

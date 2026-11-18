@@ -2,6 +2,7 @@ package me.rerere.rikkahub.plugins
 
 import dev.rikkahub.plugins.core.ExecutionAuthorizationRevoked
 import dev.rikkahub.plugins.core.ExecutionBinding
+import dev.rikkahub.plugins.core.ExecutionResultUnavailable
 import dev.rikkahub.plugins.core.ModelAttemptLedger
 import dev.rikkahub.plugins.core.RunControl
 import dev.rikkahub.plugins.protocol.*
@@ -189,7 +190,7 @@ class SessionAgentRun private constructor(
                 tool: me.rerere.ai.ui.UIMessagePart.Tool,
                 error: Throwable,
             ): String? {
-                if (error !is ExecutionAuthorizationRevoked) return null
+                if (error !is ExecutionAuthorizationRevoked && error !is ExecutionResultUnavailable) return null
                 store.update(ref) { old ->
                     // Stop may have won while the runtime was draining. Never revive its terminal run.
                     if (old.state.status != RunStatus.ACTIVE) {
@@ -202,7 +203,7 @@ class SessionAgentRun private constructor(
                         ))
                     }
                 }
-                return "Tool ${tool.toolCallId} in ${message.id} has no confirmed outcome after execution revocation"
+                return "Tool ${tool.toolCallId} in ${message.id} has no confirmed outcome after execution interruption"
             }
 
             override suspend fun checkpoint(message: UIMessage, next: AgentCursor): AgentCheckpoint {

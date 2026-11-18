@@ -1,7 +1,9 @@
 package dev.rikkahub.plugins.runtime
 
 import com.dokar.quickjs.QuickJs
+import com.dokar.quickjs.QuickJsInterruptedException
 import com.dokar.quickjs.binding.asyncFunction
+import dev.rikkahub.plugins.core.ExecutionResultUnavailable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -9,6 +11,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -74,7 +77,13 @@ class PluginRuntime(private val timeoutMillis: Long = 10_000, private val hostRe
                 // quickjs-kt 1.0.15 does not join host jobs on eval cancellation/close.
                 // Cancel and drain our ownership tree before releasing the native engine.
                 close()
-                throw error
+                currentCoroutineContext().ensureActive()
+                // The native watchdog has a distinct SDK type even when its text looks like a JS error.
+                throw if (error is QuickJsInterruptedException) {
+                    ExecutionResultUnavailable("Plugin evaluation was interrupted before confirming a result", error)
+                } else {
+                    error
+                }
             } finally {
                 activeChain = null
             }

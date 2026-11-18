@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.os.IInterface
 import android.os.Looper
 import android.os.Parcel
+import android.os.ParcelFileDescriptor
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.rikkahub.plugins.core.PluginContract
 import dev.rikkahub.plugins.protocol.PluginManifest
@@ -23,9 +24,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
@@ -94,7 +97,23 @@ class PluginToolRuntimeRecoveryTest {
         exercise(Cut.HOST_CLOSE)
     }
 
-    private enum class Cut { BEFORE_CALL, AFTER_CALL, USER_STOP, STOP_AND_REVOKE, HOST_CLOSE }
+    @Test fun actualIsolatedDeathKeepsTheAuthorizedRunWaitingAcrossRoomRecovery(): Unit = runBlocking {
+        exercise(Cut.RUNTIME_DEATH)
+    }
+
+    @Test fun internalRuntimeTimeoutIsNotUserStopAndCannotSkipTheUnknownTool(): Unit = runBlocking {
+        exercise(Cut.RUNTIME_TIMEOUT)
+    }
+
+    private enum class Cut {
+        BEFORE_CALL,
+        AFTER_CALL,
+        USER_STOP,
+        STOP_AND_REVOKE,
+        HOST_CLOSE,
+        RUNTIME_DEATH,
+        RUNTIME_TIMEOUT
+    }
 
     private suspend fun exercise(cut: Cut): Unit = coroutineScope {
         val app = InstrumentationRegistry.getInstrumentation().targetContext
@@ -113,11 +132,25 @@ class PluginToolRuntimeRecoveryTest {
         var work: Deferred<List<AgentEvent>>? = null
         var disabling: Deferred<Unit>? = null
         var reopenedHost: PluginHost? = null
+        var monitor: Deferred<Unit>? = null
+        val releaseMonitor = CompletableDeferred<Unit>()
         try {
             val aCandidate = host.prepare(archive("dev.example.reviewtool.a", toolPackage = false))
             val a = host.activate(aCandidate, aCandidate.pkg.manifest.capabilities)
             val bCandidate = host.prepare(archive("dev.example.reviewtool.b", toolPackage = true))
             val b = host.activate(bCandidate, bCandidate.pkg.manifest.capabilities)
+            val crashTarget = if (cut == Cut.RUNTIME_DEATH) {
+                val ready = CompletableDeferred<Triple<Int, Int, IBinder>>()
+                monitor = async(Dispatchers.IO) {
+                    host.withInstance(b.lease) { client ->
+                        ready.complete(Triple(client.processId, client.processUid, checkNotNull(local.connectedBinder)))
+                        releaseMonitor.await()
+                    }
+                }
+                withTimeout(20_000) { ready.await() }
+            } else {
+                null
+            }
             val initial = Conversation.ofId(Uuid.random()).copy(title = "Tool scope observation")
                 .updateCurrentMessages(listOf(UIMessage.user("private-original-AB-source")))
             repository.insertConversation(initial)
@@ -199,6 +232,24 @@ class PluginToolRuntimeRecoveryTest {
                     emptyList()
                 }
 
+                Cut.RUNTIME_DEATH, Cut.RUNTIME_TIMEOUT -> {
+                    if (cut == Cut.RUNTIME_DEATH) {
+                        val (pid, uid, binder) = checkNotNull(crashTarget)
+                        assertEquals("Actual CALL must use the process observed by OPEN", binder, local.callBinder)
+                        assertTrue("Crash only the observed isolated service UID", uid % 100000 >= 90000)
+                        assertTrue(pid != android.os.Process.myPid())
+                        val command = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(
+                            "am crash $pid"
+                        )
+                        val result = ParcelFileDescriptor.AutoCloseInputStream(command).use { String(it.readBytes()) }
+                        assertFalse(
+                            "Isolated process was not found: $result",
+                            result.contains("could not", ignoreCase = true)
+                        )
+                    }
+                    withTimeout(25_000) { work.await() }
+                }
+
                 Cut.HOST_CLOSE -> {
                     withTimeout(20_000) { host.close() }
                     val stoppedEvents = withTimeout(20_000) { work.await() }
@@ -215,39 +266,40 @@ class PluginToolRuntimeRecoveryTest {
                         "Full original A+B is reauthorized, not substituted by independent B",
                         newHost.authorizedPackages(originalAB)
                     )
-                    val coldSession = ConversationSession(initial.id, unavailable, this, store, {
-                    }).also { it.initialize({ unavailable }) }
-                    val coldRun = SessionAgentRun.open(
-                        coldSession,
-                        coldSession.state.value.currentMessages,
-                        packageAuthorization = newHost::authorizedPackages
-                    ) { _, _ -> null }
-                    assertEquals(run.ref, coldRun.ref)
-                    assertTrue(
-                        "Unconfirmed tool effect must survive restoration of full original authorization",
-                        "host.recovery" in
-                            coldSession.state.value.executionLedger().runs.getValue(run.ref.runId).state.gates
-                    )
-                    val resumedPlan = coldRun.resumePlan()
-                    val resumedTools = newHost.toolDefinitions(coldRun.runtimeBinding()) {
-                        coldSession.state.value.runInputMessages(coldRun.ref.runId)
-                    }
-                    val resumedRequest =
-                        AgentRequest(
-                            provider,
-                            ProviderSetting.OpenAI(),
-                            resumedPlan.history,
-                            tools = resumedTools,
-                            stream = false
-                        )
-                    withTimeout(20_000) {
-                        runAgent(
-                            coldRun.bind(resumedRequest, resumedPlan),
-                            coldRun.hooks(hooks)
-                        ).toList().also { nextEvents ->
-                            nextEvents.forEach { coldRun.accept(it) }
-                        }
-                    }
+                    stoppedEvents
+                }
+            }
+            if (cut in setOf(Cut.HOST_CLOSE, Cut.RUNTIME_DEATH, Cut.RUNTIME_TIMEOUT)) {
+                val recoveryHost = reopenedHost ?: host
+                val unavailable = repository.getConversationById(initial.id)!!
+                assertTrue("Original authorization remains valid", recoveryHost.authorizedPackages(originalAB))
+                val coldSession = ConversationSession(initial.id, unavailable, this, store, {
+                }).also { it.initialize({ unavailable }) }
+                val coldRun = SessionAgentRun.open(
+                    coldSession,
+                    coldSession.state.value.currentMessages,
+                    packageAuthorization = recoveryHost::authorizedPackages
+                ) { _, _ -> null }
+                assertEquals(run.ref, coldRun.ref)
+                assertTrue(
+                    "Unconfirmed effect must survive full original authorization",
+                    "host.recovery" in
+                        coldSession.state.value.executionLedger().runs.getValue(run.ref.runId).state.gates
+                )
+                val resumedPlan = coldRun.resumePlan()
+                val resumedTools = recoveryHost.toolDefinitions(coldRun.runtimeBinding()) {
+                    coldSession.state.value.runInputMessages(coldRun.ref.runId)
+                }
+                val resumedRequest = AgentRequest(
+                    provider,
+                    ProviderSetting.OpenAI(),
+                    resumedPlan.history,
+                    tools = resumedTools,
+                    stream = false
+                )
+                withTimeout(20_000) {
+                    runAgent(coldRun.bind(resumedRequest, resumedPlan), coldRun.hooks(hooks)).toList()
+                        .forEach { coldRun.accept(it) }
                 }
             }
             val persisted = repository.getConversationById(initial.id)!!
@@ -276,7 +328,8 @@ class PluginToolRuntimeRecoveryTest {
                     )
                 }
 
-                Cut.HOST_CLOSE -> {
+                Cut.HOST_CLOSE, Cut.RUNTIME_DEATH, Cut.RUNTIME_TIMEOUT -> {
+                    assertTrue("Transport loss is not cancellation of the parent", currentCoroutineContext().isActive)
                     assertTrue(events.last() is AgentEvent.Yielded)
                     assertEquals(1, provider.calls.get())
                     assertEquals(RunStatus.ACTIVE, saved.state.status)
@@ -330,6 +383,8 @@ class PluginToolRuntimeRecoveryTest {
             assertEquals(sentBeforeCut + 1, local.callsSent.get())
             println("SAFE ANDROID independent-B new-scope CALL=1 result=independent-B originalCut=$cut")
         } finally {
+            releaseMonitor.complete(Unit)
+            monitor?.cancelAndJoin()
             local.releasePreparation.countDown()
             work?.cancelAndJoin()
             disabling?.cancelAndJoin()
@@ -429,6 +484,11 @@ class PluginToolRuntimeRecoveryTest {
         val releasePreparation = CountDownLatch(1)
         val callsSent = AtomicInteger()
         val firstCallSent = CompletableDeferred<Unit>()
+
+        @Volatile var connectedBinder: IBinder? = null
+
+        @Volatile var callBinder: IBinder? = null
+
         private val connections = ConcurrentHashMap<ServiceConnection, ServiceConnection>()
         fun arm(cacheCall: Int) {
             cacheCalls.set(0)
@@ -439,6 +499,7 @@ class PluginToolRuntimeRecoveryTest {
         override fun bindService(intent: Intent, connection: ServiceConnection, flags: Int): Boolean {
             val observer = object : ServiceConnection {
                 override fun onServiceConnected(name: ComponentName, service: IBinder) {
+                    connectedBinder = service
                     connection.onServiceConnected(name, object : IBinder by service {
                         override fun queryLocalInterface(descriptor: String): IInterface? = null
                         override fun transact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
@@ -456,6 +517,7 @@ class PluginToolRuntimeRecoveryTest {
                             }
                             val result = service.transact(code, data, reply, flags)
                             if (call) {
+                                callBinder = service
                                 callsSent.incrementAndGet()
                                 firstCallSent.complete(Unit)
                             }
