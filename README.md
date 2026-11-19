@@ -31,6 +31,11 @@ official release attached to this repository.
 - For Android builds: the JDK, Android SDK and Gradle versions declared by the
   profile/toolchain.
 
+Version pins are present, but full artifact-integrity verification is still
+incomplete for the Gradle distribution, resolved Maven dependencies and Android
+SDK revisions. See [known build limits](docs/MAINTENANCE.md#build-toolchain-limits)
+before treating a local build as a reproducible binary build.
+
 ## Maintenance-tool and SDK checks
 
 ```powershell

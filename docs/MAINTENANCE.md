@@ -1,5 +1,14 @@
 # Maintenance
 
+## Build toolchain limits
+
+The profile pins tool versions, but three artifact-integrity checks remain
+incomplete: the Gradle distribution checksum, checksums for resolved Maven
+dependencies, and exact Android SDK revision verification. The current checks
+confirm selected tool versions; they do not establish fully reproducible APK
+binaries. Treat those checks as separate work before distributing a signed
+host APK.
+
 ## Contribution path
 
 1. Create a focused branch and describe the user-visible behavior change.
