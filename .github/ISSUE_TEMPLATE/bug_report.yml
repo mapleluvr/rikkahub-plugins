@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible problem in the host, SDK, or plugin workflow
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        For security vulnerabilities, do not open a public issue. Use the
+        private reporting path in SECURITY.md. Redact tokens, conversation
+        contents, and personal data from logs.
+  - type: input
+    id: component
+    attributes:
+      label: Component
+      description: Host app, plugin SDK/tooling, or a specific plugin
+      placeholder: Host app
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Host and plugin versions
+      placeholder: Host versionCode/versionName; plugin id/version
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android version
+      placeholder: Device model, Android API, ABI
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: Minimal numbered steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or screenshots
+      description: >-
+        Remove credentials, private conversation data, and identifiers before
+        attaching.
+    validations:
+      required: false

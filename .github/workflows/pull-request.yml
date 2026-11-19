@@ -1,0 +1,66 @@
+name: Pull request checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.15.0
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+        with:
+          distribution: temurin
+          java-version: '21.0.3+9'
+      - name: Install pinned Node tooling
+        run: npm install --global pnpm@11.28.11
+      - name: Test maintenance tools and plugin SDK
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+          node tools/hostctl/cli.mjs doctor
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: rikkahub/rikkahub
+          ref: ce0e3607a8dc8a450abe5309e12d30f727a6c54a
+          path: .work/upstream
+          persist-credentials: false
+      - name: Assemble and replay the pinned patch input
+        shell: bash
+        run: |
+          node tools/hostctl/cli.mjs prepare \\
+            --source "$GITHUB_WORKSPACE/.work/upstream" \\
+            --out "$GITHUB_WORKSPACE/.work/ci-a"
+          node tools/hostctl/cli.mjs verify-replay \\
+            --source "$GITHUB_WORKSPACE/.work/upstream" \\
+            --expected "$GITHUB_WORKSPACE/.work/ci-a" \\
+            --out "$GITHUB_WORKSPACE/.work/ci-b"
+      - name: Run Kotlin JVM regression suites
+        working-directory: .work/ci-a
+        run: |
+          ./gradlew --no-daemon --stacktrace \\
+            :plugin-core:test \\
+            :plugin-runtime-quickjs:testDebugUnitTest \\
+            :ai:testDebugUnitTest \\
+            :app:testGithubDebugUnitTest \\
+            :app:compileGithubDebugKotlin
+      - name: Verify the real QuickJS contract CLI
+        working-directory: .work/ci-a/verification/quickjs-cli
+        run: ./gradlew --no-daemon test installDist
+      - name: Preserve Gradle test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pull-request-test-reports
+          path: .work/ci-a/**/build/test-results/**/*.xml
+          if-no-files-found: warn
+          retention-days: 14

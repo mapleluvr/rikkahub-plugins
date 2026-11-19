@@ -1,0 +1,19 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "Rikka",
+    "RikkaHub",
+    "QuickJS",
+    "hostctl",
+    "replayable",
+    "unredacted",
+    "versionCode",
+    "AGPL"
+  ],
+  "ignorePaths": [
+    "**/build/**",
+    ".work/**",
+    "node_modules/**"
+  ]
+}

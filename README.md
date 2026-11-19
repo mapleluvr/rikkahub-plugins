@@ -1,23 +1,86 @@
 # RikkaHub Plugin Host
 
-RikkaHub 插件宿主维护仓库：固定上游源码、重放适配补丁、导入插件平台，构建独立发行版。
+RikkaHub Plugin Host is a community-maintained derivative of
+[RikkaHub](https://github.com/rikkahub/rikkahub). It adds a replayable upstream
+patch series, a QuickJS plugin platform, and a separately identified Android
+host distribution. It is not an official RikkaHub project.
 
-插件平台、派生发行与上游跟随已实现；P2/P3、P4/P5、P6/P7 均已接受。最终 `host-v5` 固定维护输入 `3035774`：干净重放、canonical 回归、三 ABI R8/签名、完整对应源码和独立复审已核验，API26/API36 的真实 updater 与同签升级证据保留。成品位于 `.work/releases/host-v5`；正式发布等待用户确认长期 APK 密钥的可恢复离机备份。详见 [接受出口](docs/changes/p6-p7-acceptance.md)、[发行手册](docs/state/host-release-runbook.md) 和 [实施状态](docs/implementation-status.md)。
+**Status: Developer Preview preparation.** The source and integration design are
+evolving. A public APK release is not available yet. The accepted internal
+host-v5 candidate is not a public download; do not install APKs from unofficial
+mirrors.
 
-## 开发
+## What is here
 
-需要 Git、Node 24.15.0、pnpm 11.28.11；Android 使用 profile 指定的 JDK/SDK 和上游 Gradle wrapper。
+- `platform/`: Android-independent protocol, plugin archive contract, execution
+  and QuickJS runtime.
+- `adapters/rikka/`: RikkaHub application, persistence, Agent and UI integration.
+- `patches/rikka-github/`: replayable changes against the upstream commit pinned
+  in `profiles/rikka-github/profile.json`
+  (`ce0e3607a8dc8a450abe5309e12d30f727a6c54a`).
+- `sdk/plugin/`: TypeScript SDK and commands for creating, testing, packaging
+  and publishing plugins.
+- `tools/hostctl/`: input validation, upstream assembly, replay verification
+  and source export.
+- `contracts/wire/v1/`: plugin manifest, capabilities and runtime protocol.
+
+## Requirements
+
+- Git
+- Node.js `24.15.0`
+- pnpm `11.28.11`
+- For Android builds: the JDK, Android SDK and Gradle versions declared by the
+  profile/toolchain.
+
+## Maintenance-tool and SDK checks
 
 ```powershell
 pnpm install --frozen-lockfile
 pnpm test
 node tools/hostctl/cli.mjs doctor
-node tools/hostctl/cli.mjs observe-upstream --branch master
-node tools/hostctl/cli.mjs prepare --profile rikka-github --out .work/integration
 ```
 
-hostctl 接口随 P0 实现。固定的构建输入、命令与验证结果会记录在工作区和 docs/changes；未验证能力不计作阶段完成。
+## Rebuild the patched application source
 
-## 来源与许可
+Fetch the exact public upstream revision and replay the maintained patch inputs:
 
-上游为 [rikkahub/rikkahub](https://github.com/rikkahub/rikkahub)，初始基线为 bfac2440c8b4dfad97be0a20e4b3e6709fdd6d88。保留上游 AGPLv3 许可；本仓库原创代码同样按根 LICENSE 分发。
+```powershell
+git clone https://github.com/rikkahub/rikkahub.git .work/upstream
+git -C .work/upstream checkout --detach ce0e3607a8dc8a450abe5309e12d30f727a6c54a
+node tools/hostctl/cli.mjs prepare --profile rikka-github \
+  --source .work/upstream --out .work/integration
+node tools/hostctl/cli.mjs verify-replay --profile rikka-github \
+  --source .work/upstream --expected .work/integration --out .work/replay
+```
+
+Builds require Android SDK components available to the pinned AGP toolchain. Use
+the generated workspace Gradle wrapper for the application and JVM suites. See
+[CONTRIBUTING](CONTRIBUTING.md) for change and verification expectations.
+
+## Develop a plugin
+
+Start with [the plugin SDK guide](sdk/plugin/README.md), then read the
+[wire v1 contract](contracts/wire/v1/README.md). Plugins are untrusted code:
+capabilities are host-mediated and require user authorization. Run SDK and real
+QuickJS contract checks before distributing a package. The preview does not
+promise compatibility or support for every device.
+
+## Releases and support
+
+The repository currently has no official public host APK release. When one is
+published, its GitHub Release will include the APK, corresponding source,
+provenance, release index and checksums. Use only releases attached to this
+repository and verify the published checksum and signing certificate.
+
+- Bugs and feature proposals: GitHub Issues, using the supplied forms.
+- Security vulnerabilities: follow [SECURITY.md](.github/SECURITY.md); do not
+  post exploit details publicly.
+- Contributions: see [CONTRIBUTING](CONTRIBUTING.md) and the
+  [Code of Conduct](.github/CODE_OF_CONDUCT.md).
+
+## Source and license
+
+The upstream source is [rikkahub/rikkahub](https://github.com/rikkahub/rikkahub),
+pinned at the commit above. Upstream notices and the repository license must
+be preserved for redistributed derived works. This repository is licensed under
+AGPL-3.0-only; see [LICENSE](LICENSE).
