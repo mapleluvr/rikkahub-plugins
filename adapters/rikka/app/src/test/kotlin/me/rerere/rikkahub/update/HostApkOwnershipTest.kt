@@ -193,7 +193,8 @@ class HostApkOwnershipTest {
 
         val failure = requireNotNull(runCatching { staging.reserveInstall(prepared) }.exceptionOrNull())
         assertTrue("The sidecar write failure was replaced", failure is IOException)
-        assertEquals("Host download cleanup failed", failure.suppressed.single().message)
+        assertTrue("The write path was lost", failure.message.orEmpty().contains(blocked.name))
+        assertEquals("Host download cleanup failed", cleanupFailure(failure).message)
         assertArrayEquals(before, receipt.readBytes())
         assertArrayEquals(bytes, prepared.file.readBytes())
 
@@ -219,7 +220,8 @@ class HostApkOwnershipTest {
 
         val failure = requireNotNull(runCatching { staging.authorizeInstaller(ticket) }.exceptionOrNull())
         assertTrue("The sidecar write failure was replaced", failure is IOException)
-        assertEquals("Host download cleanup failed", failure.suppressed.single().message)
+        assertTrue("The write path was lost", failure.message.orEmpty().contains(blocked.name))
+        assertEquals("Host download cleanup failed", cleanupFailure(failure).message)
         assertArrayEquals(before, receipt.readBytes())
         assertTrue(staging.hasInstall(ticket))
         assertArrayEquals(bytes, prepared.file.readBytes())
@@ -295,6 +297,12 @@ class HostApkOwnershipTest {
             scope.cancel()
         }
     }
+
+    // Coroutine stacktrace recovery retains suppressed errors on the original cause.
+    private fun cleanupFailure(failure: Throwable): Throwable =
+        generateSequence(failure) { it.cause }
+            .flatMap { it.suppressed.asSequence() }
+            .single()
 
     private suspend fun prepare(
         staging: HostApkStaging,
