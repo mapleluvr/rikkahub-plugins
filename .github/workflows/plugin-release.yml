@@ -70,11 +70,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.3+9'
-      - uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
-        with:
-          version: 11.28.11
-          run_install: false
-      - uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
         with:
           version: 11.28.11
           run_install: false
@@ -130,7 +126,7 @@ jobs:
         with:
           name: plugin-release
           path: release
-      - uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
         with:
           version: 11.28.11
           run_install: false
