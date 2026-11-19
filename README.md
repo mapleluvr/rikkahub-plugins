@@ -5,10 +5,9 @@ RikkaHub Plugin Host is a community-maintained derivative of
 patch series, a QuickJS plugin platform, and a separately identified Android
 host distribution. It is not an official RikkaHub project.
 
-**Status: Developer Preview preparation.** The source and integration design are
-evolving. A public APK release is not available yet. The accepted internal
-host-v5 candidate is not a public download; do not install APKs from unofficial
-mirrors.
+**Status: Source Developer Preview.** The host and SDK continue to evolve.
+There is no public signed host APK release. Only use APKs distributed by an
+official release attached to this repository.
 
 ## What is here
 
@@ -86,4 +85,6 @@ repository and verify the published checksum and signing certificate.
 The upstream source is [rikkahub/rikkahub](https://github.com/rikkahub/rikkahub),
 pinned at the commit above. Upstream notices and the repository license must
 be preserved for redistributed derived works. This repository is licensed under
-AGPL-3.0-only; see [LICENSE](LICENSE).
+AGPL-3.0-only; see [LICENSE](LICENSE). Also see the
+[maintenance guide](docs/MAINTENANCE.md) and
+[third-party license inventory](docs/THIRD_PARTY_LICENSES.md).
