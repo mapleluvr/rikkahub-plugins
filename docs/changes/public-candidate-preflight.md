@@ -45,8 +45,10 @@ incomplete. README and `docs/MAINTENANCE.md` disclose these limits.
 ## Remaining Gates
 
 Before changing the repository to Public, confirm the publication revision and
-ensure the first public PR workflow run succeeds on Ubuntu. Review GitHub
-rulesets and required-check settings against the configured workflow. The
+review GitHub rulesets and required-check settings against the configured
+workflow. Run the PR workflow on a private candidate branch when repository
+settings permit. Otherwise, make the first post-publication action a CI run and
+keep the repository in Preview until the Ubuntu workflow succeeds. The
 source-only candidate retains upstream license notices and documents the
 incomplete Android dependency inventory. A signed APK release requires a
 complete release-specific third-party inventory plus the separate signing-key
