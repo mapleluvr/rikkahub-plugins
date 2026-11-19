@@ -28,7 +28,10 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm test
           node tools/hostctl/cli.mjs doctor
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify the real QuickJS contract CLI
+        working-directory: verification/quickjs-cli
+        run: ./gradlew --no-daemon test installDist
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: rikkahub/rikkahub
           ref: ce0e3607a8dc8a450abe5309e12d30f727a6c54a
@@ -37,10 +40,10 @@ jobs:
       - name: Assemble and replay the pinned patch input
         shell: bash
         run: |
-          node tools/hostctl/cli.mjs prepare \\
+          node tools/hostctl/cli.mjs prepare --profile rikka-github \\
             --source "$GITHUB_WORKSPACE/.work/upstream" \\
             --out "$GITHUB_WORKSPACE/.work/ci-a"
-          node tools/hostctl/cli.mjs verify-replay \\
+          node tools/hostctl/cli.mjs verify-replay --profile rikka-github \\
             --source "$GITHUB_WORKSPACE/.work/upstream" \\
             --expected "$GITHUB_WORKSPACE/.work/ci-a" \\
             --out "$GITHUB_WORKSPACE/.work/ci-b"
@@ -53,14 +56,13 @@ jobs:
             :ai:testDebugUnitTest \\
             :app:testGithubDebugUnitTest \\
             :app:compileGithubDebugKotlin
-      - name: Verify the real QuickJS contract CLI
-        working-directory: .work/ci-a/verification/quickjs-cli
-        run: ./gradlew --no-daemon test installDist
       - name: Preserve Gradle test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pull-request-test-reports
-          path: .work/ci-a/**/build/test-results/**/*.xml
-          if-no-files-found: warn
+          path: |
+            .work/ci-a/**/build/test-results/**/*.xml
+            verification/quickjs-cli/build/test-results/**/*.xml
+          if-no-files-found: error
           retention-days: 14

@@ -45,12 +45,15 @@ node tools/hostctl/cli.mjs doctor
 Fetch the exact public upstream revision and replay the maintained patch inputs:
 
 ```powershell
+New-Item -ItemType Directory -Force .work
 git clone https://github.com/rikkahub/rikkahub.git .work/upstream
 git -C .work/upstream checkout --detach ce0e3607a8dc8a450abe5309e12d30f727a6c54a
-node tools/hostctl/cli.mjs prepare --profile rikka-github \
-  --source .work/upstream --out .work/integration
-node tools/hostctl/cli.mjs verify-replay --profile rikka-github \
-  --source .work/upstream --expected .work/integration --out .work/replay
+node tools/hostctl/cli.mjs prepare `
+  --profile rikka-github --source .work/upstream `
+  --out .work/integration
+node tools/hostctl/cli.mjs verify-replay `
+  --profile rikka-github --source .work/upstream `
+  --expected .work/integration --out .work/replay
 ```
 
 Builds require Android SDK components available to the pinned AGP toolchain. Use
