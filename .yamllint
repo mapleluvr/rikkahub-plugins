@@ -1,0 +1,15 @@
+extends: default
+ignore: |
+  .work/
+  node_modules/
+  build/
+  pnpm-lock.yaml
+rules:
+  document-start:
+    present: true
+  line-length:
+    max: 80
+    allow-non-breakable-inline-mappings: true
+    allow-non-breakable-words: true
+  truthy:
+    check-keys: false

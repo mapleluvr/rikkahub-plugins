@@ -1,3 +1,4 @@
+---
 name: Plugin package
 on:
   workflow_call:
@@ -21,10 +22,14 @@ on:
         default: false
     secrets:
       host-read-token:
-        description: Optional read-only token while the host toolkit repository is private
+        description: >-
+          Optional read-only token while the host toolkit repository is
+          private
         required: false
       plugin-signing-key:
-        description: Optional P-256 private key PEM; configured in the release environment
+        description: >-
+          Optional P-256 private key PEM; configured in the release
+          environment
         required: false
 permissions: {}
 concurrency:
@@ -47,7 +52,7 @@ jobs:
           if [[ "$PUBLISH" == true ]]; then
             [[ "$GITHUB_REF" == "refs/tags/$TAG" ]] || exit 1
           fi
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           path: plugin
           persist-credentials: false
@@ -58,18 +63,25 @@ jobs:
           token: ${{ secrets.host-read-token || github.token }}
           path: toolkit
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24.15.0
-      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
         with:
           distribution: temurin
           java-version: '21.0.3+9'
+      - uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
+        with:
+          version: 11.28.11
+          run_install: false
+      - uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
+        with:
+          version: 11.28.11
+          run_install: false
       - name: Install pinned dependencies and run plugin tests
         env:
           PLUGIN_DIRECTORY: ${{ inputs.plugin-directory }}
         run: |
-          npm install --global pnpm@11.28.11
           pnpm --dir toolkit install --frozen-lockfile
           cd "plugin/$PLUGIN_DIRECTORY"
           pnpm install --frozen-lockfile
@@ -79,12 +91,17 @@ jobs:
           PLUGIN_DIRECTORY: ${{ inputs.plugin-directory }}
           RIKKA_RELEASE_TAG: ${{ inputs.release-tag }}
         run: |
-          node toolkit/sdk/plugin/release.mjs build "plugin/$PLUGIN_DIRECTORY" release
-          node toolkit/sdk/plugin/release.mjs build "plugin/$PLUGIN_DIRECTORY" repeat
+          node toolkit/sdk/plugin/release.mjs build \
+            "plugin/$PLUGIN_DIRECTORY" release
+          node toolkit/sdk/plugin/release.mjs build \
+            "plugin/$PLUGIN_DIRECTORY" repeat
           diff --recursive release repeat
-          bash toolkit/verification/quickjs-cli/gradlew -p toolkit/verification/quickjs-cli test installDist
-          toolkit/verification/quickjs-cli/build/install/rikka-plugin-contract/bin/rikka-plugin-contract "$PWD/release"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+          bash toolkit/verification/quickjs-cli/gradlew \
+            -p toolkit/verification/quickjs-cli test installDist
+          contract=toolkit/verification/quickjs-cli/build/install
+          contract="$contract/rikka-plugin-contract/bin/rikka-plugin-contract"
+          "$contract" "$PWD/release"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: plugin-release
           path: release/
@@ -98,7 +115,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      # No plugin checkout, package scripts or plugin evaluation in this privileged job.
+      # The privileged job never checks out plugin code or runs package scripts.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ inputs.host-repository }}
@@ -109,13 +126,16 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24.15.0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: plugin-release
           path: release
+      - uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
+        with:
+          version: 11.28.11
+          run_install: false
       - name: Install trusted verifier and check artifact
         run: |
-          npm install --global pnpm@11.28.11
           pnpm --dir toolkit install --frozen-lockfile --ignore-scripts
           node toolkit/sdk/plugin/release.mjs verify release
       - name: Sign index if configured
@@ -125,7 +145,14 @@ jobs:
         run: |
           if [[ -n "$SIGNING_KEY" ]]; then
             trap 'rm -f "$RIKKA_SIGNING_KEY_FILE"' EXIT
-            node -e 'require("node:fs").writeFileSync(process.env.RIKKA_SIGNING_KEY_FILE, process.env.SIGNING_KEY, {mode: 0o600})'
+            node <<'NODE'
+            const fs = require('node:fs');
+            fs.writeFileSync(
+              process.env.RIKKA_SIGNING_KEY_FILE,
+              process.env.SIGNING_KEY,
+              { mode: 0o600 },
+            );
+            NODE
             unset SIGNING_KEY
             node toolkit/sdk/plugin/release.mjs sign release
           fi
