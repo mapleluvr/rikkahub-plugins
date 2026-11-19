@@ -2,12 +2,13 @@
 
 ## Build toolchain limits
 
-The profile pins tool versions, but three artifact-integrity checks remain
-incomplete: the Gradle distribution checksum, checksums for resolved Maven
-dependencies, and exact Android SDK revision verification. The current checks
-confirm selected tool versions; they do not establish fully reproducible APK
-binaries. Treat those checks as separate work before distributing a signed
-host APK.
+The profile declares expected versions. The current `doctor` environment gate
+actively checks Node.js, Java and Git, while pnpm, Gradle, AGP, Kotlin, Android
+SDK levels and QuickJS are still reported as unverified. The toolchain also has
+three incomplete artifact-integrity checks: the Gradle distribution checksum,
+checksums for resolved Maven dependencies, and exact Android SDK revision
+verification. These declarations and checks do not establish fully reproducible
+APK binaries. Close the relevant gaps before distributing a signed host APK.
 
 ## Contribution path
 
