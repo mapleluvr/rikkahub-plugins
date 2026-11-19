@@ -2,7 +2,7 @@
 
 RikkaHub 插件宿主维护仓库：固定上游源码、重放适配补丁、导入插件平台，构建独立发行版。
 
-P2/P3 和 P4/P5 已通过独立审查。派生 APK 已通过签名、并装和正式 R8 前版升级验证，上游 profile 已推进至 ce0e3607。P6/P7 独立复审发现 APK 冷启动资源归属缺陷，当前修复安装交接并准备新冻结复审。详见 [实施状态](docs/implementation-status.md) 和 [仓库设计](docs/state/plugin-patch-repository.md)。
+插件平台、派生发行与上游跟随已实现；P2/P3、P4/P5、P6/P7 均已接受。最终 `host-v5` 固定维护输入 `3035774`：干净重放、canonical 回归、三 ABI R8/签名、完整对应源码和独立复审已核验，API26/API36 的真实 updater 与同签升级证据保留。成品位于 `.work/releases/host-v5`；正式发布等待用户确认长期 APK 密钥的可恢复离机备份。详见 [接受出口](docs/changes/p6-p7-acceptance.md)、[发行手册](docs/state/host-release-runbook.md) 和 [实施状态](docs/implementation-status.md)。
 
 ## 开发
 
