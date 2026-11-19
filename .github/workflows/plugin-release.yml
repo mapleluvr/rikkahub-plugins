@@ -5,7 +5,7 @@ on:
     inputs:
       host-repository:
         type: string
-        default: mapleluvr/rikkahub-plugin-host
+        default: mapleluvr/rikkahub-plugins
       host-ref:
         description: Exact reviewed host toolkit commit (40 hex characters)
         type: string

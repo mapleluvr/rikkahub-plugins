@@ -47,21 +47,21 @@ jobs:
       - name: Assemble and replay the pinned patch input
         shell: bash
         run: |
-          node tools/hostctl/cli.mjs prepare --profile rikka-github \\
-            --source "$GITHUB_WORKSPACE/.work/upstream" \\
+          node tools/hostctl/cli.mjs prepare --profile rikka-github \
+            --source "$GITHUB_WORKSPACE/.work/upstream" \
             --out "$GITHUB_WORKSPACE/.work/ci-a"
-          node tools/hostctl/cli.mjs verify-replay --profile rikka-github \\
-            --source "$GITHUB_WORKSPACE/.work/upstream" \\
-            --expected "$GITHUB_WORKSPACE/.work/ci-a" \\
+          node tools/hostctl/cli.mjs verify-replay --profile rikka-github \
+            --source "$GITHUB_WORKSPACE/.work/upstream" \
+            --expected "$GITHUB_WORKSPACE/.work/ci-a" \
             --out "$GITHUB_WORKSPACE/.work/ci-b"
       - name: Run Kotlin JVM regression suites
         working-directory: .work/ci-a
         run: |
-          ./gradlew --no-daemon --stacktrace \\
-            :plugin-core:test \\
-            :plugin-runtime-quickjs:testDebugUnitTest \\
-            :ai:testDebugUnitTest \\
-            :app:testGithubDebugUnitTest \\
+          ./gradlew --no-daemon --stacktrace \
+            :plugin-core:test \
+            :plugin-runtime-quickjs:testDebugUnitTest \
+            :ai:testDebugUnitTest \
+            :app:testGithubDebugUnitTest \
             :app:compileGithubDebugKotlin
       - name: Preserve Gradle test reports
         if: always()

@@ -55,5 +55,20 @@ complete release-specific third-party inventory plus the separate signing-key
 recovery, source provenance, anonymous download and updater checks documented
 in `docs/THIRD_PARTY_LICENSES.md` and the release runbook.
 
-The remote repository remains Private. No remote operation was performed as
-part of this preflight.
+No remote operation was performed as part of the original preflight.
+
+## Publication preparation
+
+The authorized public destination is `mapleluvr/rikkahub-plugins`. The existing
+private repository remains separate. Issue links, the reusable plugin workflow,
+the generated plugin template and the host update source now use the public
+destination. Previously signed private candidates keep their original bytes;
+this source update does not publish those APKs.
+
+The PR workflow's multiline Bash commands were corrected to use one trailing
+backslash. A real Bash argument-delivery check reproduced the old command's
+failure and verified all three corrected invocations. Maintenance-tool and SDK
+tests passed 71/71 again; yamllint and actionlint passed using repository-local
+configuration. The existing 85-commit history was scanned again with Gitleaks
+v8.25.1 with no findings. The final publication commit is scanned separately
+before push. GitHub Ubuntu CI remains pending until the first public run.

@@ -6,7 +6,7 @@
   "versionCode": 5,
   "versionName": "3.3.0-plugins.5",
   "updates": {
-    "repository": "mapleluvr/rikkahub-plugin-host",
+    "repository": "mapleluvr/rikkahub-plugins",
     "assetName": "host-release.json"
   },
   "signingCertificateSha256": "bda4cb9edbbd6e9d13e21e0f37195eb27d8c9bdb5f9cdec0720c87a714ca426b"

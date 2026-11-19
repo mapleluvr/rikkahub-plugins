@@ -60,7 +60,7 @@ permissions:
   contents: write
 jobs:
   package:
-    uses: mapleluvr/rikkahub-plugin-host/.github/workflows/plugin-release.yml@${hostRef}
+    uses: mapleluvr/rikkahub-plugins/.github/workflows/plugin-release.yml@${hostRef}
     with:
       host-ref: ${hostRef}
       release-tag: \${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1.0' }}
