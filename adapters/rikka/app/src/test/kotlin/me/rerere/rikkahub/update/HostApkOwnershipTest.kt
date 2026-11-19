@@ -17,6 +17,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.coroutines.CoroutineContext
@@ -180,6 +181,58 @@ class HostApkOwnershipTest {
     }
 
     @Test
+    fun reserveWriteFailurePreservesItsCauseAndSuppressedCleanup() = runBlocking {
+        val directory = temp.newFolder()
+        val staging = HostApkStaging(directory)
+        val prepared = prepare(staging)
+        val receipt = directory.listFiles()!!.single { it.extension == "lease" }
+        val before = receipt.readBytes()
+        val blocked = File(directory, "${receipt.name}.tmp")
+        assertTrue(blocked.mkdir())
+        val occupied = File(blocked, "occupied").apply { writeText("owned write fault") }
+
+        val failure = requireNotNull(runCatching { staging.reserveInstall(prepared) }.exceptionOrNull())
+        assertTrue("The sidecar write failure was replaced", failure is IOException)
+        assertEquals("Host download cleanup failed", failure.suppressed.single().message)
+        assertArrayEquals(before, receipt.readBytes())
+        assertArrayEquals(bytes, prepared.file.readBytes())
+
+        assertTrue(occupied.delete())
+        assertTrue(blocked.delete())
+        val ticket = staging.reserveInstall(prepared)
+        staging.refuseUnsentInstall(ticket)
+        staging.discard(prepared)
+        assertTrue(directory.listFiles()!!.isEmpty())
+    }
+
+    @Test
+    fun authorizeWriteFailurePreservesItsCauseWithoutGrantingTheRequest() = runBlocking {
+        val directory = temp.newFolder()
+        val staging = HostApkStaging(directory)
+        val prepared = prepare(staging)
+        val ticket = staging.reserveInstall(prepared)
+        val receipt = directory.listFiles()!!.single { it.extension == "lease" }
+        val before = receipt.readBytes()
+        val blocked = File(directory, "${receipt.name}.tmp")
+        assertTrue(blocked.mkdir())
+        val occupied = File(blocked, "occupied").apply { writeText("owned authorize fault") }
+
+        val failure = requireNotNull(runCatching { staging.authorizeInstaller(ticket) }.exceptionOrNull())
+        assertTrue("The sidecar write failure was replaced", failure is IOException)
+        assertEquals("Host download cleanup failed", failure.suppressed.single().message)
+        assertArrayEquals(before, receipt.readBytes())
+        assertTrue(staging.hasInstall(ticket))
+        assertArrayEquals(bytes, prepared.file.readBytes())
+
+        assertTrue(occupied.delete())
+        assertTrue(blocked.delete())
+        assertEquals(prepared.file, staging.authorizeInstaller(ticket))
+        staging.discard(prepared)
+        staging.finishInstall(ticket)
+        assertTrue(directory.listFiles()!!.isEmpty())
+    }
+
+    @Test
     fun failedDeletionPreservesTheReceiptAndReportsFailure() = runBlocking {
         val directory = temp.newFolder()
         val staging = HostApkStaging(directory)
@@ -187,7 +240,9 @@ class HostApkOwnershipTest {
         assertTrue(prepared.file.delete())
         assertTrue(prepared.file.mkdir())
         File(prepared.file, "occupied").writeText("owned fault injection")
-        assertTrue(runCatching { staging.discard(prepared) }.isFailure)
+        val failure = requireNotNull(runCatching { staging.discard(prepared) }.exceptionOrNull())
+        assertEquals("Host download cleanup failed", failure.message)
+        assertTrue(failure.suppressed.isEmpty())
         assertTrue(directory.listFiles()!!.any { it.extension == "lease" })
         assertTrue(prepared.file.exists())
     }

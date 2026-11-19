@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
@@ -260,7 +261,7 @@ internal class HostApkStaging(
 
     private fun save(record: Record) {
         val temporary = File(directory, "host-update-${record.id}.lease.tmp")
-        try {
+        Closeable { deleteFile(temporary) }.use {
             FileOutputStream(temporary).use { output ->
                 output.write(json.encodeToString(record).toByteArray(Charsets.UTF_8))
                 output.fd.sync()
@@ -271,8 +272,6 @@ internal class HostApkStaging(
                 StandardCopyOption.ATOMIC_MOVE,
                 StandardCopyOption.REPLACE_EXISTING,
             )
-        } finally {
-            deleteFile(temporary)
         }
     }
 
